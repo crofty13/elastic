@@ -1,0 +1,50 @@
+# API Keys and Secrets
+keys.sh
+*.key
+*.pem
+.env
+.env.local
+
+# Virtual Environment
+venv/
+venv-howto
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CSV and data files (uncomment if needed)
+# *.csv
+
+# Logs
+*.log
+
