@@ -1,0 +1,101 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upload-events-to-elastic
+  namespace: default
+  labels:
+    app: upload-events-to-elastic
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: upload-events-to-elastic
+  template:
+    metadata:
+      labels:
+        app: upload-events-to-elastic
+    spec:
+      containers:
+      - name: upload-events-api
+        # Replace with your Docker image
+        # You'll need to build and push this image to a registry
+        # Example: image: your-registry/upload-events-to-elastic:latest
+        image: upload-events-to-elastic:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5001
+          name: http
+          protocol: TCP
+        env:
+        - name: ELASTIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: elastic-api-key
+              key: apiKey
+        # OpenTelemetry environment variables
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "https://af75f5831ca74783b80e17b3166aa46d.ingest.eu-west-2.aws.elastic.cloud:443/v1/traces"
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: "service.name=upload-events-to-elastic,service.version=1,deployment.environment=production"
+        # Note: OTEL_EXPORTER_OTLP_HEADERS will be set programmatically in Python code
+        # from ELASTIC_API_KEY to avoid Kubernetes secret interpolation issues
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5001
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: upload-events-to-elastic-service
+  namespace: default
+  labels:
+    app: upload-events-to-elastic
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 5001
+    protocol: TCP
+    name: http
+  selector:
+    app: upload-events-to-elastic
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: upload-events-to-elastic-nodeport
+  namespace: default
+  labels:
+    app: upload-events-to-elastic
+spec:
+  type: NodePort
+  ports:
+  - port: 5001
+    targetPort: 5001
+    nodePort: 30081
+    protocol: TCP
+    name: http
+  selector:
+    app: upload-events-to-elastic
+
