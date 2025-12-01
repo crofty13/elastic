@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
       - name: query-clothes-api
-        image: query-clothes-service:latest
+        image: query-clothes-service:v1
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5003

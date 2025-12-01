@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
       - name: embed-user-query-api
-        image: embed-user-query-service:latest
+        image: embed-user-query-service:v1
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5002

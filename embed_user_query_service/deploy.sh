@@ -1,4 +1,4 @@
 #!/bin/bash
-docker buildx build --platform linux/amd64,linux/arm64 t embed-user-query-service:latest -t crofty1300/embed-user-query-service:latest --load .
-kubectl apply -f deployment.yaml
+docker build -f embed_user_query_service/Dockerfile -t embed-user-query-service:v1 embed_user_query_service/
+kubectl apply -f embed_user_query_service/deployment.yaml
 

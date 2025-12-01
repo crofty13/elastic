@@ -26,11 +26,16 @@ except ImportError as e:
 # OpenTelemetry imports and setup
 try:
     from opentelemetry import trace
+    from opentelemetry.propagate import set_global_textmap
+    from opentelemetry.propagators.composite import CompositeHTTPPropagator
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.instrumentation.flask import FlaskInstrumentor
+    from opentelemetry.instrumentation.requests import RequestsInstrumentor
+    from opentelemetry.instrumentation.openai import OpenAIInstrumentor
     OTEL_AVAILABLE = True
 except ImportError as e:
     print("Warning: OpenTelemetry packages not found. Metrics will not be sent.")
@@ -39,6 +44,8 @@ except ImportError as e:
     print("  pip install opentelemetry-api opentelemetry-sdk")
     print("  pip install opentelemetry-exporter-otlp-proto-http")
     print("  pip install opentelemetry-instrumentation-flask")
+    print("  pip install opentelemetry-instrumentation-requests")
+    print("  pip install opentelemetry-instrumentation-openai")
     OTEL_AVAILABLE = False
 
 # Check for environment variables
@@ -110,7 +117,15 @@ def setup_opentelemetry():
         span_processor = BatchSpanProcessor(otlp_exporter)
         tracer_provider.add_span_processor(span_processor)
         trace.set_tracer_provider(tracer_provider)
+        
+        # Set up trace context propagation (W3C Trace Context format)
+        # This ensures trace context is passed in HTTP headers between services
+        set_global_textmap(CompositeHTTPPropagator([TraceContextTextMapPropagator()]))
+        
+        # Instrument Flask, requests, and OpenAI
         FlaskInstrumentor().instrument_app(app)
+        RequestsInstrumentor().instrument()
+        OpenAIInstrumentor().instrument()
         
         actual_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT)
         
@@ -119,6 +134,8 @@ def setup_opentelemetry():
         print(f"  Service: {resource_attrs.get('service.name', 'main-service')}")
         print(f"  API Key configured: {'Yes' if api_key else 'No'}")
         print(f"  Flask instrumentation: Enabled")
+        print(f"  Requests instrumentation: Enabled")
+        print(f"  OpenAI instrumentation: Enabled")
         
     except Exception as e:
         print(f"Warning: Failed to set up OpenTelemetry: {e}")
@@ -248,7 +265,7 @@ def get_recommendation(user_query: str) -> str:
     events_hits = events_result["hits"]["hits"]
     
     if not events_hits:
-        raise ValueError("No matching events found. Please try a different query.")
+        raise ValueError("Sorry I couldnt find that event. How about you tell me more your plans")
     
     # Step 3: Extract occasion from the top event
     top_event = events_hits[0]["_source"]

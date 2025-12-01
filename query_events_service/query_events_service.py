@@ -23,11 +23,15 @@ except ImportError as e:
 # OpenTelemetry imports and setup
 try:
     from opentelemetry import trace
+    from opentelemetry.propagate import set_global_textmap
+    from opentelemetry.propagators.composite import CompositeHTTPPropagator
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.instrumentation.flask import FlaskInstrumentor
+    from opentelemetry.instrumentation.requests import RequestsInstrumentor
     OTEL_AVAILABLE = True
 except ImportError as e:
     print("Warning: OpenTelemetry packages not found. Metrics will not be sent.")
@@ -36,6 +40,7 @@ except ImportError as e:
     print("  pip install opentelemetry-api opentelemetry-sdk")
     print("  pip install opentelemetry-exporter-otlp-proto-http")
     print("  pip install opentelemetry-instrumentation-flask")
+    print("  pip install opentelemetry-instrumentation-requests")
     OTEL_AVAILABLE = False
 
 # Check for environment variables
@@ -102,7 +107,14 @@ def setup_opentelemetry():
         span_processor = BatchSpanProcessor(otlp_exporter)
         tracer_provider.add_span_processor(span_processor)
         trace.set_tracer_provider(tracer_provider)
+        
+        # Set up trace context propagation (W3C Trace Context format)
+        # This ensures trace context is received from incoming HTTP requests
+        set_global_textmap(CompositeHTTPPropagator([TraceContextTextMapPropagator()]))
+        
+        # Instrument Flask and HTTP requests (for Elasticsearch calls)
         FlaskInstrumentor().instrument_app(app)
+        RequestsInstrumentor().instrument()
         
         actual_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT)
         
@@ -111,6 +123,7 @@ def setup_opentelemetry():
         print(f"  Service: {resource_attrs.get('service.name', 'query-events-service')}")
         print(f"  API Key configured: {'Yes' if api_key else 'No'}")
         print(f"  Flask instrumentation: Enabled")
+        print(f"  Requests instrumentation: Enabled (captures Elasticsearch HTTP calls)")
         
     except Exception as e:
         print(f"Warning: Failed to set up OpenTelemetry: {e}")
