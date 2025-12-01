@@ -156,7 +156,36 @@
     }
     .result-content {
       font-size: 0.98rem; line-height: 1.7; color: var(--text-main);
-      white-space: pre-wrap;
+    }
+    .result-content h1,
+    .result-content h2,
+    .result-content h3 {
+      margin-top: 1.5rem;
+      margin-bottom: 0.75rem;
+      color: var(--text-main);
+    }
+    .result-content h1:first-child,
+    .result-content h2:first-child,
+    .result-content h3:first-child {
+      margin-top: 0;
+    }
+    .result-content p {
+      margin-bottom: 1rem;
+    }
+    .result-content ul,
+    .result-content ol {
+      margin-bottom: 1rem;
+      padding-left: 1.5rem;
+    }
+    .result-content li {
+      margin-bottom: 0.5rem;
+    }
+    .result-content strong {
+      font-weight: 600;
+    }
+    .result-content em {
+      font-style: italic;
+      color: var(--muted);
     }
     .error-message {
       background: rgba(255, 79, 139, 0.1);
@@ -348,7 +377,7 @@
 
             <article class="outfit-card accent-party">
               <div class="outfit-img-wrap">
-                <img src="https://images.pexels.com/photos/1589216/pexels-photo-1589216.jpeg"
+                <img src="https://plus.unsplash.com/premium_photo-1661299216916-60a554a9942a?q=80&w=1770&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D"
                      alt="Model outfit for evening party" />
                 <div class="outfit-tag">Evening party</div>
                 <div class="outfit-badge">High-impact, low effort</div>
@@ -369,7 +398,7 @@
 
             <article class="outfit-card accent-holiday">
               <div class="outfit-img-wrap">
-                <img src="https://images.pexels.com/photos/1589216/pexels-photo-1589216.jpeg"
+                <img src="https://images.unsplash.com/photo-1629185752193-0d25bb978c04?q=80&w=987&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3Dhttps://images.pexels.com/photos/1589216/pexels-photo-1589216.jpeg"
                      alt="Model outfit for holiday" />
                 <div class="outfit-tag">Holiday</div>
                 <div class="outfit-badge">Carry-on friendly</div>
@@ -457,8 +486,8 @@
           throw new Error(data.error || 'An error occurred');
         }
 
-        // Show results
-        resultContent.textContent = data.recommendation;
+        // Show results (render HTML)
+        resultContent.innerHTML = data.recommendation;
         resultSection.classList.add('show');
         
         // Scroll to results

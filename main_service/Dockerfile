@@ -25,3 +25,4 @@ ENV PYTHONUNBUFFERED=1
 # Run the application
 CMD ["python", "main_service.py"]
 
+

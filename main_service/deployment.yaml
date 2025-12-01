@@ -33,7 +33,7 @@ spec:
         - name: OPENAI_API_KEY
           valueFrom:
             secretKeyRef:
-              name: elastic-api-key
+              name: openai-api-key
               key: apiKey
         # OpenTelemetry environment variables
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -98,4 +98,5 @@ spec:
     name: http
   selector:
     app: main-service
+
 

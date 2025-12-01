@@ -52,6 +52,9 @@ EMBED_SERVICE_URL = os.environ.get("EMBED_SERVICE_URL", "http://embed-user-query
 QUERY_EVENTS_SERVICE_URL = os.environ.get("QUERY_EVENTS_SERVICE_URL", "http://query-events-service:5004")
 QUERY_CLOTHES_SERVICE_URL = os.environ.get("QUERY_CLOTHES_SERVICE_URL", "http://query-clothes-service:5003")
 
+# Static configuration
+GENDER = "men"
+
 # OpenTelemetry configuration
 OTEL_ENDPOINT = os.environ.get(
     "OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -170,6 +173,7 @@ def query_events(query_vector: list, k: int = 3) -> dict:
         )
         response.raise_for_status()
         data = response.json()
+        print(f"\n[DEBUG] query_events response: {json.dumps(data, indent=2)}")
         if data.get('status') == 'success':
             # Format response to match original structure
             events_list = data.get('results', [])
@@ -186,25 +190,23 @@ def query_events(query_vector: list, k: int = 3) -> dict:
         raise ValueError(f"Failed to call query events service: {str(e)}")
 
 
-def get_clothes_list(gender: str, occasion_tags: list = None, size: int = 10) -> list:
+def get_clothes_list(gender: str, occation: str = None) -> list:
     """
     Call the query_clothes microservice to search for clothes.
     
     Args:
         gender: Gender filter (e.g., "women", "men")
-        occasion_tags: Optional list of occasion tags
-        size: Number of results to return
+        occation: Optional occasion string from query_events
         
     Returns:
         List of clothing items
     """
     try:
         payload = {
-            "gender": gender,
-            "size": size
+            "gender": gender
         }
-        if occasion_tags:
-            payload["occasion_tags"] = occasion_tags
+        if occation:
+            payload["occation"] = occation
         
         response = requests.post(
             f"{QUERY_CLOTHES_SERVICE_URL}/query",
@@ -213,6 +215,7 @@ def get_clothes_list(gender: str, occasion_tags: list = None, size: int = 10) ->
         )
         response.raise_for_status()
         data = response.json()
+        print(f"\n[DEBUG] get_clothes_list response: {json.dumps(data, indent=2)}")
         if data.get('status') == 'success':
             return data.get('results', [])
         else:
@@ -247,23 +250,22 @@ def get_recommendation(user_query: str) -> str:
     if not events_hits:
         raise ValueError("No matching events found. Please try a different query.")
     
-    # Step 3: Extract tags from the top event
+    # Step 3: Extract occasion from the top event
     top_event = events_hits[0]["_source"]
     
-    # Extract occasion
-    occasion = top_event.get("occasion", [])
+    # Extract occasion field (this is the field name in the events index)
+    occasion = top_event.get("occasion", "")
     
-    # Ensure occasion is a list
-    occasion_tags = occasion if isinstance(occasion, list) else [occasion]
+    # Ensure occasion is a string (not a list)
+    if isinstance(occasion, list):
+        occation = occasion[0] if occasion else ""
+    else:
+        occation = occasion if occasion else ""
     
     # Step 4: Query clothes based on extracted event details (via microservice)
-    # Default to women's clothing (you can make this configurable)
-    gender = "women"
-    
     clothes_results = get_clothes_list(
-        gender=gender,
-        occasion_tags=occasion_tags,
-        size=10
+        gender=GENDER,
+        occation=occation
     )
     
     # Step 5: Prepare context for OpenAI
@@ -289,10 +291,12 @@ def get_recommendation(user_query: str) -> str:
     system_prompt = """You are a fashion advisor helping users dress appropriately for specific occasions. 
 Based on the event details and available clothing items provided, give personalized recommendations."""
     
-    user_prompt = f"""Based on the following event information and available clothing items, provide a detailed write-up 
+    user_prompt = f"""Please output the answer to the following question is html format.
+    Based on the following event information and available clothing items, provide a detailed write-up 
 for what to wear. Only recommend clothes from the items listed below.
 
-USER REQUEST: {user_query}
+USER REQUEST:
+{user_query}
 
 MATCHING EVENTS:
 {events_context}
@@ -301,9 +305,11 @@ AVAILABLE CLOTHING ITEMS:
 {clothes_context}
 
 Please provide:
-1. A brief summary of the event and dress code
-2. Specific clothing recommendations (ONLY from the items listed above)
-3. Styling tips and why these choices work for this occasion
+1. A summary of the event.
+2. Pick clothese items ONLY from the ones above. pick one labelled top, one labelled bottom, one labelled shoes. Wrtie a brief summary of the outfit and then list the items, there decription and price (which should be formatted in britigh pounds
+3. Based on the clothing items you picked add the prices together to show the total.
+3. Styling tips and why these choices work for this occasion. This should be no more then 100 words.
+
 """
     
     # Step 6: Send to OpenAI
@@ -397,4 +403,5 @@ if __name__ == "__main__":
     print("=" * 60)
     
     app.run(debug=True, host='0.0.0.0', port=5000)
+
 
