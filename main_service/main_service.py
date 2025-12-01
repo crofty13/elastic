@@ -4,6 +4,7 @@ RAG (Retrieval-Augmented Generation) workflow for event and clothing recommendat
 
 This Flask application uses microservices to help users find appropriate
 clothing and events based on their queries through a web interface.
+Includes OpenTelemetry instrumentation for performance and infrastructure metrics.
 """
 
 import sys
@@ -18,18 +19,32 @@ try:
 except ImportError as e:
     print("Error: Required packages not found.")
     print(f"Details: {e}")
-    print("\nPlease run the setup script first:")
-    print("  chmod +x setup.sh")
-    print("  ./setup.sh")
-    print("\nOr manually install:")
-    print("  source venv/bin/activate")
-    print("  pip install -r requirements.txt")
+    print("\nPlease install Flask, openai, and requests:")
+    print("  pip install flask openai requests")
     sys.exit(1)
+
+# OpenTelemetry imports and setup
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.instrumentation.flask import FlaskInstrumentor
+    OTEL_AVAILABLE = True
+except ImportError as e:
+    print("Warning: OpenTelemetry packages not found. Metrics will not be sent.")
+    print(f"Details: {e}")
+    print("\nTo enable OpenTelemetry, install:")
+    print("  pip install opentelemetry-api opentelemetry-sdk")
+    print("  pip install opentelemetry-exporter-otlp-proto-http")
+    print("  pip install opentelemetry-instrumentation-flask")
+    OTEL_AVAILABLE = False
 
 # Check for environment variables
 if not os.environ.get("OPENAI_API_KEY"):
     print("Error: OPENAI_API_KEY environment variable not set.")
-    print("Please run: source keys.sh")
+    print("Please set OPENAI_API_KEY environment variable")
     sys.exit(1)
 
 # Microservice endpoints (using Kubernetes service names)
@@ -37,8 +52,74 @@ EMBED_SERVICE_URL = os.environ.get("EMBED_SERVICE_URL", "http://embed-user-query
 QUERY_EVENTS_SERVICE_URL = os.environ.get("QUERY_EVENTS_SERVICE_URL", "http://query-events-service:5004")
 QUERY_CLOTHES_SERVICE_URL = os.environ.get("QUERY_CLOTHES_SERVICE_URL", "http://query-clothes-service:5003")
 
+# OpenTelemetry configuration
+OTEL_ENDPOINT = os.environ.get(
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "https://af75f5831ca74783b80e17b3166aa46d.ingest.eu-west-2.aws.elastic.cloud:443/v1/traces"
+)
+
 # Initialize Flask app
 app = Flask(__name__)
+
+
+def setup_opentelemetry():
+    """Configure OpenTelemetry to send metrics to Elastic."""
+    if not OTEL_AVAILABLE:
+        return
+    
+    try:
+        api_key = os.environ.get("ELASTIC_API_KEY")
+        if not api_key:
+            print("Warning: ELASTIC_API_KEY not set. OpenTelemetry will not send data.")
+            return
+        
+        if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+            os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = OTEL_ENDPOINT
+        
+        otlp_headers = f"Authorization=ApiKey {api_key}"
+        if not os.environ.get("OTEL_EXPORTER_OTLP_HEADERS"):
+            os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = otlp_headers
+        
+        if not os.environ.get("OTEL_RESOURCE_ATTRIBUTES"):
+            os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
+                "service.name=main-service,"
+                "service.version=1,"
+                "deployment.environment=production"
+            )
+        
+        resource_attrs = {}
+        if os.environ.get("OTEL_RESOURCE_ATTRIBUTES"):
+            for attr in os.environ["OTEL_RESOURCE_ATTRIBUTES"].split(","):
+                if "=" in attr:
+                    key, value = attr.split("=", 1)
+                    resource_attrs[key.strip()] = value.strip()
+        
+        resource = Resource.create(resource_attrs)
+        tracer_provider = TracerProvider(resource=resource)
+        
+        otlp_exporter = OTLPSpanExporter(
+            endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT),
+            headers={
+                "Authorization": f"ApiKey {api_key}"
+            }
+        )
+        
+        span_processor = BatchSpanProcessor(otlp_exporter)
+        tracer_provider.add_span_processor(span_processor)
+        trace.set_tracer_provider(tracer_provider)
+        FlaskInstrumentor().instrument_app(app)
+        
+        actual_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT)
+        
+        print("✓ OpenTelemetry instrumentation enabled")
+        print(f"  Endpoint: {actual_endpoint}")
+        print(f"  Service: {resource_attrs.get('service.name', 'main-service')}")
+        print(f"  API Key configured: {'Yes' if api_key else 'No'}")
+        print(f"  Flask instrumentation: Enabled")
+        
+    except Exception as e:
+        print(f"Warning: Failed to set up OpenTelemetry: {e}")
+        print("  Application will continue without metrics.")
 
 
 def embed_query(user_query: str) -> list:
@@ -282,7 +363,38 @@ def chat():
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
 
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint."""
+    try:
+        return jsonify({
+            'status': 'healthy',
+            'service': 'main-service'
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e)
+        }), 500
+
+
 if __name__ == "__main__":
-    # Run the Flask app
-    # In production, use a proper WSGI server like gunicorn
+    print("=" * 60)
+    print("Main RAG Service")
+    print("=" * 60)
+    print(f"Embed Service: {EMBED_SERVICE_URL}")
+    print(f"Query Events Service: {QUERY_EVENTS_SERVICE_URL}")
+    print(f"Query Clothes Service: {QUERY_CLOTHES_SERVICE_URL}")
+    
+    # Set up OpenTelemetry instrumentation
+    setup_opentelemetry()
+    
+    print("\nEndpoints:")
+    print("  GET  / - Main chatbot page")
+    print("  POST /api/chat - Chat endpoint")
+    print("  GET  /health - Health check")
+    print("\nStarting server on http://0.0.0.0:5000")
+    print("=" * 60)
+    
     app.run(debug=True, host='0.0.0.0', port=5000)
+

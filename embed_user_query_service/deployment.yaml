@@ -1,0 +1,83 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embed-user-query-service
+  namespace: default
+  labels:
+    app: embed-user-query-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: embed-user-query-service
+  template:
+    metadata:
+      labels:
+        app: embed-user-query-service
+    spec:
+      containers:
+      - name: embed-user-query-api
+        image: embed-user-query-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5002
+          name: http
+          protocol: TCP
+        env:
+        - name: ELASTIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: elastic-api-key
+              key: apiKey
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: elastic-api-key
+              key: apiKey
+        # OpenTelemetry environment variables
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "https://af75f5831ca74783b80e17b3166aa46d.ingest.eu-west-2.aws.elastic.cloud:443/v1/traces"
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: "service.name=embed-user-query-service,service.version=1,deployment.environment=production"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5002
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5002
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: embed-user-query-service
+  namespace: default
+  labels:
+    app: embed-user-query-service
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5002
+    targetPort: 5002
+    protocol: TCP
+    name: http
+  selector:
+    app: embed-user-query-service
+
