@@ -10,6 +10,9 @@ Includes OpenTelemetry instrumentation for performance and infrastructure metric
 import sys
 import os
 import json
+import logging
+import logging.handlers
+from datetime import datetime
 import requests
 
 # Check for required modules
@@ -17,10 +20,9 @@ try:
     from openai import OpenAI
     from flask import Flask, render_template, request, jsonify
 except ImportError as e:
-    print("Error: Required packages not found.")
-    print(f"Details: {e}")
-    print("\nPlease install Flask, openai, and requests:")
-    print("  pip install flask openai requests")
+    # Use print here since logger might not be set up yet
+    print("ERROR|{\"message\": \"Required packages not found\", \"error\": \"" + str(e).replace('"', '\\"') + "\"}")
+    print("ERROR|{\"message\": \"Please install Flask, openai, and requests: pip install flask openai requests\"}")
     sys.exit(1)
 
 # OpenTelemetry imports and setup
@@ -38,20 +40,13 @@ try:
     from opentelemetry.instrumentation.openai import OpenAIInstrumentor
     OTEL_AVAILABLE = True
 except ImportError as e:
-    print("Warning: OpenTelemetry packages not found. Metrics will not be sent.")
-    print(f"Details: {e}")
-    print("\nTo enable OpenTelemetry, install:")
-    print("  pip install opentelemetry-api opentelemetry-sdk")
-    print("  pip install opentelemetry-exporter-otlp-proto-http")
-    print("  pip install opentelemetry-instrumentation-flask")
-    print("  pip install opentelemetry-instrumentation-requests")
-    print("  pip install opentelemetry-instrumentation-openai")
+    # Logger not available yet, use print
+    print("WARN|{\"message\": \"OpenTelemetry packages not found. Metrics will not be sent.\", \"error\": \"" + str(e).replace('"', '\\"') + "\"}")
     OTEL_AVAILABLE = False
 
 # Check for environment variables
 if not os.environ.get("OPENAI_API_KEY"):
-    print("Error: OPENAI_API_KEY environment variable not set.")
-    print("Please set OPENAI_API_KEY environment variable")
+    print("ERROR|{\"message\": \"OPENAI_API_KEY environment variable not set\"}")
     sys.exit(1)
 
 # Microservice endpoints (using Kubernetes service names)
@@ -71,16 +66,92 @@ OTEL_ENDPOINT = os.environ.get(
 # Initialize Flask app
 app = Flask(__name__)
 
+# Configure JSON logging
+class JSONFormatter(logging.Formatter):
+    """Custom JSON formatter with log level prefix."""
+    
+    def format(self, record):
+        log_data = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno
+        }
+        
+        # Add exception info if present
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
+        
+        # Add any extra fields from the record (excluding standard logging fields)
+        standard_fields = {'name', 'msg', 'args', 'created', 'filename', 'funcName', 
+                          'levelname', 'levelno', 'lineno', 'module', 'msecs', 'message', 
+                          'pathname', 'process', 'processName', 'relativeCreated', 'thread', 
+                          'threadName', 'exc_info', 'exc_text', 'stack_info'}
+        for key, value in record.__dict__.items():
+            if key not in standard_fields:
+                log_data[key] = value
+        
+        # Format as JSON with log level prefix
+        json_str = json.dumps(log_data, ensure_ascii=False, default=str)
+        return f"{record.levelname}|{json_str}"
+
+
+def setup_logging():
+    """Configure logging to stdout and stderr with JSON format."""
+    # Create logger
+    logger = logging.getLogger('main_service')
+    logger.setLevel(logging.INFO)
+    
+    # Prevent duplicate logs
+    logger.propagate = False
+    
+    # Clear existing handlers
+    logger.handlers.clear()
+    
+    # Create formatter
+    formatter = JSONFormatter()
+    
+    # Handler for INFO and below -> stdout
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(logging.DEBUG)
+    stdout_handler.setFormatter(formatter)
+    stdout_handler.addFilter(lambda record: record.levelno <= logging.INFO)
+    
+    # Handler for WARNING and above -> stderr
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setLevel(logging.WARNING)
+    stderr_handler.setFormatter(formatter)
+    
+    # Add handlers
+    logger.addHandler(stdout_handler)
+    logger.addHandler(stderr_handler)
+    
+    # Also configure root logger for third-party libraries
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.WARNING)
+    root_logger.addHandler(stdout_handler)
+    root_logger.addHandler(stderr_handler)
+    
+    return logger
+
+
+# Initialize logger
+logger = setup_logging()
+
 
 def setup_opentelemetry():
     """Configure OpenTelemetry to send metrics to Elastic."""
     if not OTEL_AVAILABLE:
+        logger.warning("OpenTelemetry not available - packages not installed")
         return
     
     try:
         api_key = os.environ.get("ELASTIC_API_KEY")
         if not api_key:
-            print("Warning: ELASTIC_API_KEY not set. OpenTelemetry will not send data.")
+            logger.warning("ELASTIC_API_KEY not set. OpenTelemetry will not send data.")
             return
         
         if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
@@ -129,17 +200,18 @@ def setup_opentelemetry():
         
         actual_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT)
         
-        print("✓ OpenTelemetry instrumentation enabled")
-        print(f"  Endpoint: {actual_endpoint}")
-        print(f"  Service: {resource_attrs.get('service.name', 'main-service')}")
-        print(f"  API Key configured: {'Yes' if api_key else 'No'}")
-        print(f"  Flask instrumentation: Enabled")
-        print(f"  Requests instrumentation: Enabled")
-        print(f"  OpenAI instrumentation: Enabled")
+        logger.info("OpenTelemetry instrumentation enabled", extra={
+            "endpoint": actual_endpoint,
+            "service_name": resource_attrs.get('service.name', 'main-service'),
+            "api_key_configured": bool(api_key),
+            "flask_instrumentation": True,
+            "requests_instrumentation": True,
+            "openai_instrumentation": True
+        })
         
     except Exception as e:
-        print(f"Warning: Failed to set up OpenTelemetry: {e}")
-        print("  Application will continue without metrics.")
+        logger.error(f"Failed to set up OpenTelemetry: {e}", exc_info=True)
+        logger.warning("Application will continue without metrics")
 
 
 def embed_query(user_query: str) -> list:
@@ -152,6 +224,11 @@ def embed_query(user_query: str) -> list:
     Returns:
         List[float]: The embedding vector
     """
+    logger.info("Calling embed service", extra={
+        "service_url": EMBED_SERVICE_URL,
+        "query_length": len(user_query)
+    })
+    
     try:
         response = requests.post(
             f"{EMBED_SERVICE_URL}/embed",
@@ -160,11 +237,24 @@ def embed_query(user_query: str) -> list:
         )
         response.raise_for_status()
         data = response.json()
+        
         if data.get('status') == 'success':
-            return data.get('embedding')
+            embedding = data.get('embedding')
+            logger.info("Embed service call successful", extra={
+                "embedding_dimensions": len(embedding) if embedding else 0,
+                "status_code": response.status_code
+            })
+            return embedding
         else:
-            raise ValueError(f"Embedding service error: {data.get('error', 'Unknown error')}")
+            error_msg = data.get('error', 'Unknown error')
+            logger.error(f"Embedding service error: {error_msg}", extra={
+                "service_response": data
+            })
+            raise ValueError(f"Embedding service error: {error_msg}")
     except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to call embed service: {str(e)}", exc_info=True, extra={
+            "service_url": EMBED_SERVICE_URL
+        })
         raise ValueError(f"Failed to call embed service: {str(e)}")
 
 
@@ -179,6 +269,12 @@ def query_events(query_vector: list, k: int = 3) -> dict:
     Returns:
         Dict containing events results
     """
+    logger.info("Calling query events service", extra={
+        "service_url": QUERY_EVENTS_SERVICE_URL,
+        "query_vector_length": len(query_vector),
+        "k": k
+    })
+    
     try:
         response = requests.post(
             f"{QUERY_EVENTS_SERVICE_URL}/query",
@@ -190,20 +286,37 @@ def query_events(query_vector: list, k: int = 3) -> dict:
         )
         response.raise_for_status()
         data = response.json()
-        print(f"\n[DEBUG] query_events response: {json.dumps(data, indent=2)}")
+        
+        # Log the full response as a single JSON message
+        logger.info("Query events service response received", extra={
+            "status_code": response.status_code,
+            "response_data": data
+        })
+        
         if data.get('status') == 'success':
             # Format response to match original structure
             events_list = data.get('results', [])
-            return {
+            result = {
                 "hits": {
                     "hits": [
                         {"_source": event} for event in events_list
                     ]
                 }
             }
+            logger.info("Query events service call successful", extra={
+                "events_count": len(events_list)
+            })
+            return result
         else:
-            raise ValueError(f"Query events service error: {data.get('error', 'Unknown error')}")
+            error_msg = data.get('error', 'Unknown error')
+            logger.error(f"Query events service error: {error_msg}", extra={
+                "service_response": data
+            })
+            raise ValueError(f"Query events service error: {error_msg}")
     except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to call query events service: {str(e)}", exc_info=True, extra={
+            "service_url": QUERY_EVENTS_SERVICE_URL
+        })
         raise ValueError(f"Failed to call query events service: {str(e)}")
 
 
@@ -218,6 +331,12 @@ def get_clothes_list(gender: str, occation: str = None) -> list:
     Returns:
         List of clothing items
     """
+    logger.info("Calling query clothes service", extra={
+        "service_url": QUERY_CLOTHES_SERVICE_URL,
+        "gender": gender,
+        "occation": occation
+    })
+    
     try:
         payload = {
             "gender": gender
@@ -232,12 +351,29 @@ def get_clothes_list(gender: str, occation: str = None) -> list:
         )
         response.raise_for_status()
         data = response.json()
-        print(f"\n[DEBUG] get_clothes_list response: {json.dumps(data, indent=2)}")
+        
+        # Log the full response as a single JSON message
+        logger.info("Query clothes service response received", extra={
+            "status_code": response.status_code,
+            "response_data": data
+        })
+        
         if data.get('status') == 'success':
-            return data.get('results', [])
+            results = data.get('results', [])
+            logger.info("Query clothes service call successful", extra={
+                "clothes_count": len(results)
+            })
+            return results
         else:
-            raise ValueError(f"Query clothes service error: {data.get('error', 'Unknown error')}")
+            error_msg = data.get('error', 'Unknown error')
+            logger.error(f"Query clothes service error: {error_msg}", extra={
+                "service_response": data
+            })
+            raise ValueError(f"Query clothes service error: {error_msg}")
     except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to call query clothes service: {str(e)}", exc_info=True, extra={
+            "service_url": QUERY_CLOTHES_SERVICE_URL
+        })
         raise ValueError(f"Failed to call query clothes service: {str(e)}")
 
 
@@ -254,20 +390,32 @@ def get_recommendation(user_query: str) -> str:
     Raises:
         Exception: If any step in the RAG workflow fails
     """
+    logger.info("Starting recommendation workflow", extra={
+        "user_query": user_query,
+        "query_length": len(user_query)
+    })
+    
     if not user_query.strip():
+        logger.warning("Empty query received")
         raise ValueError("Please provide a valid query.")
     
     # Step 1: Embed the user query (via microservice)
+    logger.info("Step 1: Embedding user query")
     query_vector = embed_query(user_query)
     
     # Step 2: Query events using kNN search (via microservice)
+    logger.info("Step 2: Querying events")
     events_result = query_events(query_vector, k=3)
     events_hits = events_result["hits"]["hits"]
     
     if not events_hits:
+        logger.warning("No events found for query", extra={
+            "user_query": user_query
+        })
         raise ValueError("Sorry I couldnt find that event. How about you tell me more your plans")
     
     # Step 3: Extract occasion from the top event
+    logger.info("Step 3: Extracting occasion from top event")
     top_event = events_hits[0]["_source"]
     
     # Extract occasion field (this is the field name in the events index)
@@ -279,13 +427,20 @@ def get_recommendation(user_query: str) -> str:
     else:
         occation = occasion if occasion else ""
     
+    logger.info("Occasion extracted", extra={
+        "occation": occation,
+        "top_event_name": top_event.get("name", "Unknown")
+    })
+    
     # Step 4: Query clothes based on extracted event details (via microservice)
+    logger.info("Step 4: Querying clothes")
     clothes_results = get_clothes_list(
         gender=GENDER,
         occation=occation
     )
     
     # Step 5: Prepare context for OpenAI
+    logger.info("Step 5: Preparing context for OpenAI")
     # Format events for the prompt
     events_context = "\n\n".join([
         f"Event {i+1}: {hit['_source'].get('name', 'Unknown')}\n"
@@ -303,6 +458,13 @@ def get_recommendation(user_query: str) -> str:
         f"Color: {item.get('color', 'N/A')}"
         for i, item in enumerate(clothes_results)
     ])
+    
+    logger.info("Context prepared", extra={
+        "events_count": len(events_hits),
+        "clothes_count": len(clothes_results),
+        "events_context_length": len(events_context),
+        "clothes_context_length": len(clothes_context)
+    })
     
     # Create the OpenAI prompt
     system_prompt = """You are a fashion advisor helping users dress appropriately for specific occasions. 
@@ -330,25 +492,38 @@ Please provide:
 """
     
     # Step 6: Send to OpenAI
+    logger.info("Step 6: Calling OpenAI API")
     openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
     
-    response = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        temperature=0.7
-    )
-    
-    recommendation = response.choices[0].message.content
-    
-    return recommendation
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7
+        )
+        
+        recommendation = response.choices[0].message.content
+        
+        logger.info("OpenAI API call successful", extra={
+            "model": "gpt-4o-mini",
+            "recommendation_length": len(recommendation),
+            "tokens_used": response.usage.total_tokens if hasattr(response, 'usage') else None
+        })
+        
+        logger.info("Recommendation workflow completed successfully")
+        return recommendation
+    except Exception as e:
+        logger.error(f"OpenAI API call failed: {str(e)}", exc_info=True)
+        raise
 
 
 @app.route('/')
 def index():
     """Render the main chatbot page."""
+    logger.info("Index page requested")
     return render_template('index.html')
 
 
@@ -361,28 +536,32 @@ def chat():
     Returns JSON with 'recommendation' field or 'error' field.
     """
     try:
+        logger.info("Chat API endpoint called")
         data = request.get_json()
         
         if not data or 'query' not in data:
+            logger.warning("Missing query parameter in request")
             return jsonify({'error': 'Missing query parameter'}), 400
         
         user_query = data['query']
         
         if not user_query.strip():
+            logger.warning("Empty query received in chat endpoint")
             return jsonify({'error': 'Query cannot be empty'}), 400
         
         # Get recommendation using the RAG workflow
         recommendation = get_recommendation(user_query)
         
+        logger.info("Chat API request completed successfully")
         return jsonify({
             'recommendation': recommendation
         })
         
     except ValueError as e:
+        logger.warning(f"Validation error in chat endpoint: {str(e)}")
         return jsonify({'error': str(e)}), 400
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
 
@@ -390,11 +569,13 @@ def chat():
 def health_check():
     """Health check endpoint."""
     try:
+        logger.debug("Health check requested")
         return jsonify({
             'status': 'healthy',
             'service': 'main-service'
         }), 200
     except Exception as e:
+        logger.error(f"Health check failed: {str(e)}", exc_info=True)
         return jsonify({
             'status': 'unhealthy',
             'error': str(e)
@@ -402,23 +583,25 @@ def health_check():
 
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("Main RAG Service")
-    print("=" * 60)
-    print(f"Embed Service: {EMBED_SERVICE_URL}")
-    print(f"Query Events Service: {QUERY_EVENTS_SERVICE_URL}")
-    print(f"Query Clothes Service: {QUERY_CLOTHES_SERVICE_URL}")
+    logger.info("Starting Main RAG Service", extra={
+        "embed_service_url": EMBED_SERVICE_URL,
+        "query_events_service_url": QUERY_EVENTS_SERVICE_URL,
+        "query_clothes_service_url": QUERY_CLOTHES_SERVICE_URL,
+        "gender": GENDER
+    })
     
     # Set up OpenTelemetry instrumentation
     setup_opentelemetry()
     
-    print("\nEndpoints:")
-    print("  GET  / - Main chatbot page")
-    print("  POST /api/chat - Chat endpoint")
-    print("  GET  /health - Health check")
-    print("\nStarting server on http://0.0.0.0:5000")
-    print("=" * 60)
+    logger.info("Service endpoints available", extra={
+        "endpoints": [
+            "GET  / - Main chatbot page",
+            "POST /api/chat - Chat endpoint",
+            "GET  /health - Health check"
+        ]
+    })
     
+    logger.info("Starting Flask server on http://0.0.0.0:5000")
     app.run(debug=True, host='0.0.0.0', port=5000)
 
 

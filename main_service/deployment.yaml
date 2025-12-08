@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
       - name: main-service-api
-        image: main-service:v2
+        image: main-service:v3
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5000
