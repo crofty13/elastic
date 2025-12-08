@@ -8,16 +8,19 @@ Includes OpenTelemetry instrumentation for performance and infrastructure metric
 
 import os
 import sys
+import json
+import logging
+import logging.handlers
+from datetime import datetime
 
 # Check for required modules
 try:
     from flask import Flask, request, jsonify
     from elasticsearch import Elasticsearch
 except ImportError as e:
-    print("Error: Required packages not found.")
-    print(f"Details: {e}")
-    print("\nPlease install Flask and elasticsearch:")
-    print("  pip install flask elasticsearch")
+    # Use print here since logger might not be set up yet
+    print("ERROR|{\"message\": \"Required packages not found\", \"error\": \"" + str(e).replace('"', '\\"') + "\"}")
+    print("ERROR|{\"message\": \"Please install Flask and elasticsearch: pip install flask elasticsearch\"}")
     sys.exit(1)
 
 # OpenTelemetry imports and setup
@@ -34,19 +37,13 @@ try:
     from opentelemetry.instrumentation.requests import RequestsInstrumentor
     OTEL_AVAILABLE = True
 except ImportError as e:
-    print("Warning: OpenTelemetry packages not found. Metrics will not be sent.")
-    print(f"Details: {e}")
-    print("\nTo enable OpenTelemetry, install:")
-    print("  pip install opentelemetry-api opentelemetry-sdk")
-    print("  pip install opentelemetry-exporter-otlp-proto-http")
-    print("  pip install opentelemetry-instrumentation-flask")
-    print("  pip install opentelemetry-instrumentation-requests")
+    # Logger not available yet, use print
+    print("WARN|{\"message\": \"OpenTelemetry packages not found. Metrics will not be sent.\", \"error\": \"" + str(e).replace('"', '\\"') + "\"}")
     OTEL_AVAILABLE = False
 
 # Check for environment variables
 if not os.environ.get("ELASTIC_API_KEY"):
-    print("Error: ELASTIC_API_KEY environment variable not set.")
-    print("Please set ELASTIC_API_KEY environment variable")
+    print("ERROR|{\"message\": \"ELASTIC_API_KEY environment variable not set\"}")
     sys.exit(1)
 
 # Elasticsearch endpoint
@@ -61,16 +58,92 @@ OTEL_ENDPOINT = os.environ.get(
 # Initialize Flask app
 app = Flask(__name__)
 
+# Configure JSON logging
+class JSONFormatter(logging.Formatter):
+    """Custom JSON formatter with log level prefix."""
+    
+    def format(self, record):
+        log_data = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno
+        }
+        
+        # Add exception info if present
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
+        
+        # Add any extra fields from the record (excluding standard logging fields)
+        standard_fields = {'name', 'msg', 'args', 'created', 'filename', 'funcName', 
+                          'levelname', 'levelno', 'lineno', 'module', 'msecs', 'message', 
+                          'pathname', 'process', 'processName', 'relativeCreated', 'thread', 
+                          'threadName', 'exc_info', 'exc_text', 'stack_info'}
+        for key, value in record.__dict__.items():
+            if key not in standard_fields:
+                log_data[key] = value
+        
+        # Format as JSON with log level prefix
+        json_str = json.dumps(log_data, ensure_ascii=False, default=str)
+        return f"{record.levelname}|{json_str}"
+
+
+def setup_logging():
+    """Configure logging to stdout and stderr with JSON format."""
+    # Create logger
+    logger = logging.getLogger('query_events_service')
+    logger.setLevel(logging.INFO)
+    
+    # Prevent duplicate logs
+    logger.propagate = False
+    
+    # Clear existing handlers
+    logger.handlers.clear()
+    
+    # Create formatter
+    formatter = JSONFormatter()
+    
+    # Handler for INFO and below -> stdout
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(logging.DEBUG)
+    stdout_handler.setFormatter(formatter)
+    stdout_handler.addFilter(lambda record: record.levelno <= logging.INFO)
+    
+    # Handler for WARNING and above -> stderr
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setLevel(logging.WARNING)
+    stderr_handler.setFormatter(formatter)
+    
+    # Add handlers
+    logger.addHandler(stdout_handler)
+    logger.addHandler(stderr_handler)
+    
+    # Also configure root logger for third-party libraries
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.WARNING)
+    root_logger.addHandler(stdout_handler)
+    root_logger.addHandler(stderr_handler)
+    
+    return logger
+
+
+# Initialize logger
+logger = setup_logging()
+
 
 def setup_opentelemetry():
     """Configure OpenTelemetry to send metrics to Elastic."""
     if not OTEL_AVAILABLE:
+        logger.warning("OpenTelemetry not available - packages not installed")
         return
     
     try:
         api_key = os.environ.get("ELASTIC_API_KEY")
         if not api_key:
-            print("Warning: ELASTIC_API_KEY not set. OpenTelemetry will not send data.")
+            logger.warning("ELASTIC_API_KEY not set. OpenTelemetry will not send data.")
             return
         
         if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
@@ -118,16 +191,17 @@ def setup_opentelemetry():
         
         actual_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT)
         
-        print("✓ OpenTelemetry instrumentation enabled")
-        print(f"  Endpoint: {actual_endpoint}")
-        print(f"  Service: {resource_attrs.get('service.name', 'query-events-service')}")
-        print(f"  API Key configured: {'Yes' if api_key else 'No'}")
-        print(f"  Flask instrumentation: Enabled")
-        print(f"  Requests instrumentation: Enabled (captures Elasticsearch HTTP calls)")
+        logger.info("OpenTelemetry instrumentation enabled", extra={
+            "endpoint": actual_endpoint,
+            "service_name": resource_attrs.get('service.name', 'query-events-service'),
+            "api_key_configured": bool(api_key),
+            "flask_instrumentation": True,
+            "requests_instrumentation": True
+        })
         
     except Exception as e:
-        print(f"Warning: Failed to set up OpenTelemetry: {e}")
-        print("  Application will continue without metrics.")
+        logger.error(f"Failed to set up OpenTelemetry: {e}", exc_info=True)
+        logger.warning("Application will continue without metrics")
 
 
 def get_elasticsearch_client():
@@ -144,8 +218,21 @@ def get_elasticsearch_client():
 def health_check():
     """Health check endpoint."""
     try:
+        logger.debug("Health check requested")
         es = get_elasticsearch_client()
+        
+        # Log before Elasticsearch API call
+        logger.info("Calling Elasticsearch info API", extra={
+            "endpoint": ELASTIC_ENDPOINT,
+            "api_call": "info"
+        })
         info = es.info()
+        
+        logger.info("Elasticsearch info API call successful", extra={
+            "cluster_name": info.get('cluster_name'),
+            "connected": True
+        })
+        
         return jsonify({
             'status': 'healthy',
             'service': 'query-events-service',
@@ -155,6 +242,7 @@ def health_check():
             }
         }), 200
     except Exception as e:
+        logger.error(f"Health check failed: {str(e)}", exc_info=True)
         return jsonify({
             'status': 'unhealthy',
             'error': str(e)
@@ -225,12 +313,34 @@ def query_events():
             }
         }
         
+        # Log before Elasticsearch API call
+        logger.info("Calling Elasticsearch search API", extra={
+            "endpoint": ELASTIC_ENDPOINT,
+            "index": index_name,
+            "api_call": "search",
+            "query_type": "knn",
+            "k": k,
+            "num_candidates": num_candidates,
+            "query_vector_length": len(query_vector),
+            "source_fields": source_fields
+        })
+        
         # Execute the search
         res = es.search(index=index_name, body=knn_body)
+        
+        logger.info("Elasticsearch search API call successful", extra={
+            "index": index_name,
+            "hits_count": len(res.get("hits", {}).get("hits", [])),
+            "total_hits": res.get("hits", {}).get("total", {}).get("value", 0)
+        })
         
         # Extract hits
         events_hits = res["hits"]["hits"]
         events_list = [hit["_source"] for hit in events_hits]
+        
+        logger.info("Query events endpoint completed successfully", extra={
+            "events_returned": len(events_list)
+        })
         
         return jsonify({
             'status': 'success',
@@ -239,13 +349,13 @@ def query_events():
         }), 200
         
     except ValueError as e:
+        logger.warning(f"Validation error in query events endpoint: {str(e)}")
         return jsonify({
             'error': str(e),
             'status': 'error'
         }), 400
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error in query events endpoint: {str(e)}", exc_info=True)
         return jsonify({
             'error': f'An error occurred: {str(e)}',
             'status': 'error'
@@ -253,19 +363,20 @@ def query_events():
 
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("Query Events Service")
-    print("=" * 60)
-    print(f"Elasticsearch Endpoint: {ELASTIC_ENDPOINT}")
+    logger.info("Starting Query Events Service", extra={
+        "elasticsearch_endpoint": ELASTIC_ENDPOINT
+    })
     
     # Set up OpenTelemetry instrumentation
     setup_opentelemetry()
     
-    print("\nEndpoints:")
-    print("  POST /query - Query events from Elasticsearch using kNN")
-    print("  GET  /health - Health check")
-    print("\nStarting server on http://0.0.0.0:5004")
-    print("=" * 60)
+    logger.info("Service endpoints available", extra={
+        "endpoints": [
+            "POST /query - Query events from Elasticsearch using kNN",
+            "GET  /health - Health check"
+        ]
+    })
     
+    logger.info("Starting Flask server on http://0.0.0.0:5004")
     app.run(debug=True, host='0.0.0.0', port=5004)
 
