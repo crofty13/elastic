@@ -272,6 +272,7 @@ def query_events(query_vector: list, k: int = 3) -> dict:
     logger.info("Calling query events service", extra={
         "service_url": QUERY_EVENTS_SERVICE_URL,
         "query_vector_length": len(query_vector),
+        "query_vector": query_vector[:10],
         "k": k
     })
     
@@ -497,7 +498,7 @@ Please provide:
     
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
