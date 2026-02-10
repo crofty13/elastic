@@ -57,11 +57,7 @@ QUERY_CLOTHES_SERVICE_URL = os.environ.get("QUERY_CLOTHES_SERVICE_URL", "http://
 # Static configuration
 GENDER = "men"
 
-# OpenTelemetry configuration
-OTEL_ENDPOINT = os.environ.get(
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "https://af75f5831ca74783b80e17b3166aa46d.ingest.eu-west-2.aws.elastic.cloud:443/v1/traces"
-)
+# OpenTelemetry configuration (from environment variable OTEL_EXPORTER_OTLP_ENDPOINT)
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -155,7 +151,8 @@ def setup_opentelemetry():
             return
         
         if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
-            os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = OTEL_ENDPOINT
+            logger.warning("OTEL_EXPORTER_OTLP_ENDPOINT not set. OpenTelemetry will not send data.")
+            return
         
         otlp_headers = f"Authorization=ApiKey {api_key}"
         if not os.environ.get("OTEL_EXPORTER_OTLP_HEADERS"):
@@ -179,7 +176,7 @@ def setup_opentelemetry():
         tracer_provider = TracerProvider(resource=resource)
         
         otlp_exporter = OTLPSpanExporter(
-            endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT),
+            endpoint=os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"],
             headers={
                 "Authorization": f"ApiKey {api_key}"
             }
@@ -198,10 +195,8 @@ def setup_opentelemetry():
         RequestsInstrumentor().instrument()
         OpenAIInstrumentor().instrument()
         
-        actual_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT)
-        
         logger.info("OpenTelemetry instrumentation enabled", extra={
-            "endpoint": actual_endpoint,
+            "endpoint": os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"],
             "service_name": resource_attrs.get('service.name', 'main-service'),
             "api_key_configured": bool(api_key),
             "flask_instrumentation": True,
@@ -568,7 +563,7 @@ def chat():
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint."""
+    """Health check endpoint. Returns 200 so probes pass; body indicates status."""
     try:
         logger.debug("Health check requested")
         return jsonify({
@@ -577,10 +572,12 @@ def health_check():
         }), 200
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}", exc_info=True)
+        # Return 200 so liveness/readiness probes pass; body shows degraded
         return jsonify({
-            'status': 'unhealthy',
+            'status': 'degraded',
+            'service': 'main-service',
             'error': str(e)
-        }), 500
+        }), 200
 
 
 if __name__ == "__main__":

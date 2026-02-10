@@ -17,4 +17,5 @@ echo "Building for local architecture: $PLATFORM"
 # Build for local architecture only
 docker buildx build --platform $PLATFORM -f "$SCRIPT_DIR/Dockerfile" -t query-clothes-service:v2 "$SCRIPT_DIR" --load
 
-kubectl rollout restart deployment query-clothes-service
+kubectl apply -f "$SCRIPT_DIR/deployment.yaml"
+kubectl rollout status deployment query-clothes-service --timeout=120s

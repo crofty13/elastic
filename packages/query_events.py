@@ -7,8 +7,10 @@ import os
 from elasticsearch import Elasticsearch
 from typing import List, Dict, Any, Optional
 
-# Elasticsearch endpoint
-ELASTIC_ENDPOINT = "https://my-observability-project-af75f5.es.eu-west-2.aws.elastic.cloud"
+# Elasticsearch endpoint (from keys.sh)
+ELASTIC_ENDPOINT = os.environ.get("ELASTIC_ENDPOINT")
+if not ELASTIC_ENDPOINT:
+    raise ValueError("ELASTIC_ENDPOINT environment variable is not set")
 
 
 def query_events(

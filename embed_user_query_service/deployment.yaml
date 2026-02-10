@@ -30,14 +30,22 @@ spec:
             secretKeyRef:
               name: elastic-api-key
               key: apiKey
+        - name: ELASTIC_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: elastic-endpoint
+              key: endpoint
         - name: OPENAI_API_KEY
           valueFrom:
             secretKeyRef:
               name: openai-api-key
               key: apiKey
-        # OpenTelemetry environment variables
+        # OpenTelemetry environment variables (from secret, create with: kubectl create secret generic otel-exporter-otlp-endpoint --from-literal=endpoint=$OTEL_EXPORTER_OTLP_ENDPOINT)
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: "https://af75f5831ca74783b80e17b3166aa46d.ingest.eu-west-2.aws.elastic.cloud:443/v1/traces"
+          valueFrom:
+            secretKeyRef:
+              name: otel-exporter-otlp-endpoint
+              key: endpoint
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: "service.name=embed-user-query-service,service.version=1,deployment.environment=production"
         resources:

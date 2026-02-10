@@ -28,7 +28,7 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: elastic-agent
-          image: docker.elastic.co/elastic-agent/elastic-agent-complete:9.2.2
+          image: docker.elastic.co/elastic-agent/elastic-agent:9.3.0.build202602051825
           env:
             # Set to 1 for enrollment into Fleet server. If not set, Elastic Agent is run in standalone mode
             - name: FLEET_ENROLL
@@ -39,11 +39,11 @@ spec:
             # Fleet Server URL to enroll the Elastic Agent into
             # FLEET_URL can be found in Kibana, go to Management > Fleet > Settings
             - name: FLEET_URL
-              value: "https://af75f5831ca74783b80e17b3166aa46d.fleet.eu-west-2.aws.elastic.cloud:443"
+              value: "https://e20036c75b5e43f6b902bd4570b5ecb8.fleet.europe-west2.gcp.elastic-cloud.com:443"
             # Elasticsearch API key used to enroll Elastic Agents in Fleet (https://www.elastic.co/guide/en/fleet/current/fleet-enrollment-tokens.html#fleet-enrollment-tokens)
             # If FLEET_ENROLLMENT_TOKEN is empty then KIBANA_HOST, KIBANA_FLEET_USERNAME, KIBANA_FLEET_PASSWORD are needed
             - name: FLEET_ENROLLMENT_TOKEN
-              value: "UC1yQzA1b0J0ZHlpQWlOc1VHdlk6N0ZlZ21VWVppLTZCU0tEYW1qSnZkdw=="
+              value: "YXNOZ1Fwd0JBa29PaHhiRE1wVTU6MXczZjNzYlVhdUNjZWVBeG9TVlhxdw=="
             - name: KIBANA_HOST
               value: "http://kibana:5601"
             # The basic authentication username used to connect to Kibana and retrieve a service_token to enable Fleet
@@ -64,9 +64,6 @@ spec:
             # For more info: https://www.elastic.co/guide/en/beats/metricbeat/current/add-host-metadata.html
             - name: ELASTIC_NETINFO
               value: "false"
-            # Disable internal metrics monitoring to prevent crash loop
-            - name: ELASTIC_AGENT_MONITORING_ENABLED
-              value: "false"
           securityContext:
             runAsUser: 0
             # The following capabilities are needed for Universal Profiling.
@@ -79,10 +76,10 @@ spec:
             #    - SYS_ADMIN
           resources:
             limits:
-              memory: 2Gi
-            requests:
-              cpu: 200m
               memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 500Mi
           volumeMounts:
             - name: proc
               mountPath: /hostfs/proc

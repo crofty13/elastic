@@ -17,5 +17,9 @@ echo "Building for local architecture: $PLATFORM"
 # Build for local architecture only
 docker buildx build --platform $PLATFORM -f "$SCRIPT_DIR/Dockerfile" -t embed-user-query-service:v1 "$SCRIPT_DIR" --load
 
-kubectl rollout restart deployment embed-user-query-service
+if kubectl get deployment embed-user-query-service &>/dev/null; then
+    kubectl rollout restart deployment embed-user-query-service
+else
+    kubectl apply -f "$SCRIPT_DIR/deployment.yaml"
+fi
 

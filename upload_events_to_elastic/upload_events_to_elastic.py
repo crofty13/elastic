@@ -46,17 +46,16 @@ if not os.environ.get("ELASTIC_API_KEY"):
     print("Error: ELASTIC_API_KEY environment variable not set.")
     print("Please run: source keys.sh")
     sys.exit(1)
+if not os.environ.get("ELASTIC_ENDPOINT"):
+    print("Error: ELASTIC_ENDPOINT environment variable not set.")
+    print("Please run: source keys.sh")
+    sys.exit(1)
 
-# Elasticsearch endpoint (same as other programs)
-ELASTIC_ENDPOINT = "https://my-observability-project-af75f5.es.eu-west-2.aws.elastic.cloud"
+# Elasticsearch variables
+ELASTIC_ENDPOINT = os.environ["ELASTIC_ENDPOINT"]
 INDEX_NAME = "events"
 
-# OpenTelemetry configuration
-# These can be overridden by environment variables
-OTEL_ENDPOINT = os.environ.get(
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "https://af75f5831ca74783b80e17b3166aa46d.ingest.eu-west-2.aws.elastic.cloud:443/v1/traces"
-)
+# OpenTelemetry configuration (from environment variable OTEL_EXPORTER_OTLP_ENDPOINT)
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -74,10 +73,10 @@ def setup_opentelemetry():
             print("Warning: ELASTIC_API_KEY not set. OpenTelemetry will not send data.")
             return
         
-        # Set OTEL environment variables if not already set
-        # OpenTelemetry SDK will automatically use these
+        # OTEL endpoint must be set in environment
         if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
-            os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = OTEL_ENDPOINT
+            print("Warning: OTEL_EXPORTER_OTLP_ENDPOINT not set. OpenTelemetry will not send data.")
+            return
         
         # Construct the header with ApiKey format (not Bearer)
         otlp_headers = f"Authorization=ApiKey {api_key}"
@@ -109,7 +108,7 @@ def setup_opentelemetry():
         # Configure OTLP exporter with API key authentication
         # Use ApiKey format (not Bearer) as required by Elastic
         otlp_exporter = OTLPSpanExporter(
-            endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT),
+            endpoint=os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"],
             headers={
                 "Authorization": f"ApiKey {api_key}"
             }
@@ -128,11 +127,8 @@ def setup_opentelemetry():
         # Note: Elasticsearch has native OpenTelemetry support, so we don't need
         # to use ElasticsearchInstrumentor. The warning about it being disabled is expected.
         
-        # Get the actual endpoint being used
-        actual_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT)
-        
         print("✓ OpenTelemetry instrumentation enabled")
-        print(f"  Endpoint: {actual_endpoint}")
+        print(f"  Endpoint: {os.environ['OTEL_EXPORTER_OTLP_ENDPOINT']}")
         print(f"  Service: {resource_attrs.get('service.name', 'upload-events-to-elastic')}")
         print(f"  API Key configured: {'Yes' if api_key else 'No'}")
         print(f"  Flask instrumentation: Enabled")

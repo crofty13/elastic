@@ -2,15 +2,15 @@
 import os
 from elasticsearch import Elasticsearch
 
-# Get API key from environment
+# Get API key and endpoint from environment (source keys.sh)
 ELASTIC_API_KEY = os.environ.get("ELASTIC_API_KEY")
 if not ELASTIC_API_KEY:
     raise ValueError("ELASTIC_API_KEY environment variable is not set")
+ELASTIC_ENDPOINT = os.environ.get("ELASTIC_ENDPOINT")
+if not ELASTIC_ENDPOINT:
+    raise ValueError("ELASTIC_ENDPOINT environment variable is not set")
 
-client = Elasticsearch(
-  "https://my-observability-project-af75f5.es.eu-west-2.aws.elastic.cloud",
-  api_key=ELASTIC_API_KEY
-)
+client = Elasticsearch(ELASTIC_ENDPOINT, api_key=ELASTIC_API_KEY)
 print(client.info())
 
 

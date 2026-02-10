@@ -17,5 +17,6 @@ echo "Building for local architecture: $PLATFORM"
 # Build for local architecture only
 docker buildx build --platform $PLATFORM -f "$SCRIPT_DIR/Dockerfile" -t main-service:v3 "$SCRIPT_DIR" --load
 
-kubectl rollout restart deployment main-service
+kubectl apply -f "$SCRIPT_DIR/deployment.yaml"
+kubectl rollout status deployment main-service --timeout=120s
 

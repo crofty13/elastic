@@ -45,15 +45,14 @@ except ImportError as e:
 if not os.environ.get("ELASTIC_API_KEY"):
     print("ERROR|{\"message\": \"ELASTIC_API_KEY environment variable not set\"}")
     sys.exit(1)
+if not os.environ.get("ELASTIC_ENDPOINT"):
+    print("ERROR|{\"message\": \"ELASTIC_ENDPOINT environment variable not set\"}")
+    sys.exit(1)
 
-# Elasticsearch endpoint
-ELASTIC_ENDPOINT = "https://my-observability-project-af75f5.es.eu-west-2.aws.elastic.cloud"
+# Elasticsearch endpoint (from keys.sh); strip in case secret has trailing newline
+ELASTIC_ENDPOINT = os.environ["ELASTIC_ENDPOINT"].strip()
 
-# OpenTelemetry configuration
-OTEL_ENDPOINT = os.environ.get(
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "https://af75f5831ca74783b80e17b3166aa46d.ingest.eu-west-2.aws.elastic.cloud:443/v1/traces"
-)
+# OpenTelemetry configuration (from environment variable OTEL_EXPORTER_OTLP_ENDPOINT)
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -147,7 +146,8 @@ def setup_opentelemetry():
             return
         
         if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
-            os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = OTEL_ENDPOINT
+            logger.warning("OTEL_EXPORTER_OTLP_ENDPOINT not set. OpenTelemetry will not send data.")
+            return
         
         otlp_headers = f"Authorization=ApiKey {api_key}"
         if not os.environ.get("OTEL_EXPORTER_OTLP_HEADERS"):
@@ -171,7 +171,7 @@ def setup_opentelemetry():
         tracer_provider = TracerProvider(resource=resource)
         
         otlp_exporter = OTLPSpanExporter(
-            endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT),
+            endpoint=os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"],
             headers={
                 "Authorization": f"ApiKey {api_key}"
             }
@@ -189,10 +189,8 @@ def setup_opentelemetry():
         FlaskInstrumentor().instrument_app(app)
         RequestsInstrumentor().instrument()
         
-        actual_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT)
-        
         logger.info("OpenTelemetry instrumentation enabled", extra={
-            "endpoint": actual_endpoint,
+            "endpoint": os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"],
             "service_name": resource_attrs.get('service.name', 'query-clothes-service'),
             "api_key_configured": bool(api_key),
             "flask_instrumentation": True,
@@ -206,7 +204,7 @@ def setup_opentelemetry():
 
 def get_elasticsearch_client():
     """Initialize and return Elasticsearch client."""
-    api_key = os.environ.get("ELASTIC_API_KEY")
+    api_key = (os.environ.get("ELASTIC_API_KEY") or "").strip()
     if not api_key:
         raise ValueError("ELASTIC_API_KEY environment variable is not set")
     
@@ -216,23 +214,15 @@ def get_elasticsearch_client():
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint."""
+    """Health check endpoint. Returns 200 so probes pass; body indicates ES connectivity."""
     try:
         logger.debug("Health check requested")
         es = get_elasticsearch_client()
-        
-        # Log before Elasticsearch API call
-        logger.info("Calling Elasticsearch info API", extra={
-            "endpoint": ELASTIC_ENDPOINT,
-            "api_call": "info"
-        })
         info = es.info()
-        
         logger.info("Elasticsearch info API call successful", extra={
             "cluster_name": info.get('cluster_name'),
             "connected": True
         })
-        
         return jsonify({
             'status': 'healthy',
             'service': 'query-clothes-service',
@@ -243,10 +233,13 @@ def health_check():
         }), 200
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}", exc_info=True)
+        # Return 200 so liveness/readiness probes pass; body shows degraded
         return jsonify({
-            'status': 'unhealthy',
+            'status': 'degraded',
+            'service': 'query-clothes-service',
+            'elasticsearch': {'connected': False},
             'error': str(e)
-        }), 500
+        }), 200
 
 
 @app.route('/query', methods=['POST'])

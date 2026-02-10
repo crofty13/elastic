@@ -54,11 +54,7 @@ if not os.environ.get("OPENAI_API_KEY"):
 # OpenAI embedding model
 EMBEDDING_MODEL = "text-embedding-3-small"
 
-# OpenTelemetry configuration
-OTEL_ENDPOINT = os.environ.get(
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "https://af75f5831ca74783b80e17b3166aa46d.ingest.eu-west-2.aws.elastic.cloud:443/v1/traces"
-)
+# OpenTelemetry configuration (from environment variable OTEL_EXPORTER_OTLP_ENDPOINT)
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -76,9 +72,10 @@ def setup_opentelemetry():
             print("Warning: ELASTIC_API_KEY not set. OpenTelemetry will not send data.")
             return
         
-        # Set OTEL environment variables if not already set
+        # OTEL endpoint must be set in environment
         if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
-            os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = OTEL_ENDPOINT
+            print("Warning: OTEL_EXPORTER_OTLP_ENDPOINT not set. OpenTelemetry will not send data.")
+            return
         
         # Construct the header with ApiKey format
         otlp_headers = f"Authorization=ApiKey {api_key}"
@@ -108,7 +105,7 @@ def setup_opentelemetry():
         
         # Configure OTLP exporter
         otlp_exporter = OTLPSpanExporter(
-            endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT),
+            endpoint=os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"],
             headers={
                 "Authorization": f"ApiKey {api_key}"
             }
@@ -130,10 +127,8 @@ def setup_opentelemetry():
         OpenAIInstrumentor().instrument()
         RequestsInstrumentor().instrument()
         
-        actual_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OTEL_ENDPOINT)
-        
         print("✓ OpenTelemetry instrumentation enabled")
-        print(f"  Endpoint: {actual_endpoint}")
+        print(f"  Endpoint: {os.environ['OTEL_EXPORTER_OTLP_ENDPOINT']}")
         print(f"  Service: {resource_attrs.get('service.name', 'embed-user-query-service')}")
         print(f"  API Key configured: {'Yes' if api_key else 'No'}")
         print(f"  Flask instrumentation: Enabled")
@@ -147,17 +142,19 @@ def setup_opentelemetry():
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint."""
+    """Health check endpoint. Returns 200 so probes pass; body indicates status."""
     try:
         return jsonify({
             'status': 'healthy',
             'service': 'embed-user-query-service'
         }), 200
     except Exception as e:
+        # Return 200 so liveness/readiness probes pass; body shows degraded
         return jsonify({
-            'status': 'unhealthy',
+            'status': 'degraded',
+            'service': 'embed-user-query-service',
             'error': str(e)
-        }), 500
+        }), 200
 
 
 @app.route('/embed', methods=['POST'])
