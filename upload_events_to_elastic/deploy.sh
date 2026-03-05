@@ -15,8 +15,7 @@ fi
 
 echo "Building for local architecture: $PLATFORM"
 # Build for local architecture only
-docker buildx build --platform $PLATFORM -f "$SCRIPT_DIR/Dockerfile" -t main-service:v4 "$SCRIPT_DIR" --load
+docker buildx build --platform $PLATFORM -f "$SCRIPT_DIR/Dockerfile" -t upload-events-to-elastic:latest "$SCRIPT_DIR" --load
 
 kubectl apply -f "$SCRIPT_DIR/deployment.yaml"
-kubectl rollout status deployment main-service --timeout=120s
-
+kubectl rollout status deployment upload-events-to-elastic --timeout=120s

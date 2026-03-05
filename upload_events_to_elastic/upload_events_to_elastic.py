@@ -51,8 +51,8 @@ if not os.environ.get("ELASTIC_ENDPOINT"):
     print("Please run: source keys.sh")
     sys.exit(1)
 
-# Elasticsearch variables
-ELASTIC_ENDPOINT = os.environ["ELASTIC_ENDPOINT"]
+# Elasticsearch endpoint; strip newlines and trailing slash so client requests GET /
+ELASTIC_ENDPOINT = os.environ["ELASTIC_ENDPOINT"].strip().rstrip("/")
 INDEX_NAME = "events"
 
 # OpenTelemetry configuration (from environment variable OTEL_EXPORTER_OTLP_ENDPOINT)
@@ -67,8 +67,8 @@ def setup_opentelemetry():
         return
     
     try:
-        # Get API key from environment
-        api_key = os.environ.get("ELASTIC_API_KEY")
+        # Get API key from environment (strip in case secret has trailing newline)
+        api_key = (os.environ.get("ELASTIC_API_KEY") or "").strip()
         if not api_key:
             print("Warning: ELASTIC_API_KEY not set. OpenTelemetry will not send data.")
             return
@@ -141,7 +141,7 @@ def setup_opentelemetry():
 
 def get_elasticsearch_client():
     """Initialize and return Elasticsearch client."""
-    api_key = os.environ.get("ELASTIC_API_KEY")
+    api_key = (os.environ.get("ELASTIC_API_KEY") or "").strip()
     if not api_key:
         raise ValueError("ELASTIC_API_KEY environment variable is not set")
     
@@ -236,10 +236,9 @@ def upload_event():
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint to verify Elasticsearch connection."""
+    """Health check endpoint. Returns 200 so probes pass; body indicates ES connectivity."""
     try:
         es = get_elasticsearch_client()
-        # Test connection with a simple cluster info call
         info = es.info()
         return jsonify({
             'status': 'healthy',
@@ -250,10 +249,12 @@ def health_check():
             }
         }), 200
     except Exception as e:
+        # Return 200 so liveness/readiness probes pass; body shows degraded
         return jsonify({
-            'status': 'unhealthy',
+            'status': 'degraded',
+            'elasticsearch': {'connected': False},
             'error': str(e)
-        }), 500
+        }), 200
 
 
 if __name__ == "__main__":

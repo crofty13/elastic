@@ -49,8 +49,8 @@ if not os.environ.get("ELASTIC_ENDPOINT"):
     print("ERROR|{\"message\": \"ELASTIC_ENDPOINT environment variable not set\"}")
     sys.exit(1)
 
-# Elasticsearch endpoint (from keys.sh); strip in case secret has trailing newline
-ELASTIC_ENDPOINT = os.environ["ELASTIC_ENDPOINT"].strip()
+# Elasticsearch endpoint (from keys.sh); strip newlines and trailing slash so client requests GET /
+ELASTIC_ENDPOINT = os.environ["ELASTIC_ENDPOINT"].strip().rstrip("/")
 
 # OpenTelemetry configuration (from environment variable OTEL_EXPORTER_OTLP_ENDPOINT)
 
