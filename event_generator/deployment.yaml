@@ -1,0 +1,91 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-generator
+  namespace: default
+  labels:
+    app: event-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: event-generator
+  template:
+    metadata:
+      labels:
+        app: event-generator
+    spec:
+      containers:
+      - name: event-generator-api
+        image: event-generator:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5005
+          name: http
+          protocol: TCP
+        env:
+        - name: ELASTIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: elastic-api-key
+              key: apiKey
+        - name: ELASTIC_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: elastic-endpoint
+              key: endpoint
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-api-key
+              key: apiKey
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: otel-exporter-otlp-endpoint
+              key: endpoint
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: "service.name=event-generator,service.version=1,deployment.environment=production"
+        - name: ELASTIC_INDEXES_DIR
+          value: "/app/Elastic_indexes"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5005
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5005
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: event-generator
+  namespace: default
+  labels:
+    app: event-generator
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5005
+    targetPort: 5005
+    protocol: TCP
+    name: http
+  selector:
+    app: event-generator
