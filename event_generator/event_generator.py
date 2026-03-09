@@ -2,10 +2,10 @@
 """
 Event Generator Service
 
-Generates new events for the chatbot app.
-Uses OpenAI to create events based on UK happenings over the next 12 months,
-then indexes them into Elasticsearch with embeddings. Same OTEL, logging, and
-Elastic/OpenAI configuration as other services.
+Generates new events for the chatbot app, and for each event generates 3 clothing
+items (top, bottom, shoes) appropriate for that event. Uses OpenAI for both;
+events go to the Elasticsearch events index (with embeddings), clothes to the
+clothes index. Same OTEL, logging, and Elastic/OpenAI configuration as other services.
 """
 
 import os
@@ -47,6 +47,7 @@ for var in ("ELASTIC_API_KEY", "ELASTIC_ENDPOINT", "OPENAI_API_KEY"):
 
 ELASTIC_ENDPOINT = os.environ["ELASTIC_ENDPOINT"].strip().rstrip("/")
 INDEX_EVENTS = "events"
+INDEX_CLOTHES = "clothes"
 EVENTS_PER_RUN = 10
 
 # Path to Elastic_indexes (in repo, copied into image)
@@ -305,17 +306,132 @@ def index_event(es, doc):
     return es.index(index=INDEX_EVENTS, id=event_id, body=body, request_timeout=120)
 
 
+def fetch_existing_clothes_names_descriptions(es):
+    """
+    Fetch name and description of every document in the clothes index.
+    Returns a list of dicts [{"name": "...", "description": "..."}, ...] for the prompt.
+    Description truncated to 500 chars to match existing clothes generator limits.
+    """
+    try:
+        res = es.search(
+            index=INDEX_CLOTHES,
+            body={
+                "size": 10000,
+                "_source": ["name", "description"],
+                "query": {"match_all": {}},
+            },
+            request_timeout=30,
+        )
+        hits = res.get("hits", {}).get("hits", [])
+        existing = []
+        for h in hits:
+            src = h.get("_source") or {}
+            existing.append({
+                "name": src.get("name") or "",
+                "description": (src.get("description") or "")[:500],
+            })
+        return existing
+    except Exception as e:
+        logger.warning("Failed to fetch existing clothes from Elasticsearch: %s", e)
+        return []
+
+
+def generate_three_clothes_for_event(openai_client, clothes_schema, event, existing_clothes_text):
+    """
+    Ask OpenAI for 3 clothing items (top, bottom, shoes) appropriate for the given event.
+    season and occation must match the event. Returns a list of 3 dicts suitable for the clothes index.
+    Uses existing_clothes_text to avoid duplicating names/descriptions.
+    Event description limited to 800 chars in prompt (same as clothes generator).
+    """
+    event_name = event.get("name") or "Unknown event"
+    occasion = event.get("occasion") or "casual"
+    season = event.get("season") or "summer"
+    description = (event.get("description") or "")[:800]
+
+    system = (
+        "You are a fashion generator for a clothing app. You output only valid JSON, no markdown or explanation. "
+        "Generate exactly 3 fake clothing items that would be appropriate to wear to the given event. "
+        "The 3 items must be: "
+        "1) A TOP (e.g. jumper, dress, t-shirt, blouse, shirt, sweater). "
+        "2) A BOTTOM (e.g. trousers, skirt, shorts, jeans, chinos). "
+        "3) SHOES (e.g. loafers, trainers, boots, heels, sandals). "
+        "Use the exact field names from the clothes index schema: name, description, body, occation, price, season, sex. "
+        "Set 'body' to exactly one of: 'top', 'bottom', 'shoes' for each item. "
+        "Set 'occation' and 'season' to match the event exactly (occation: " + repr(occasion) + ", season: " + repr(season) + "). "
+        "Use 'sex' as 'unisex' or 'men' or 'women'. "
+        "Price can be a string like '£45' or '£120'. "
+        "Descriptions should be 1–2 sentences, fake product copy. "
+        "Return a JSON object with a single key 'items' whose value is an array of exactly 3 objects, one for top, one for bottom, one for shoes. "
+        "Do NOT duplicate or closely mimic any name or description from the EXISTING CLOTHES list provided; create new fake items."
+    )
+    user_parts = []
+    if existing_clothes_text.strip():
+        user_parts.append(
+            "EXISTING CLOTHES ALREADY IN THE STORE (do not duplicate these names or descriptions):\n"
+            + existing_clothes_text.strip()
+            + "\n\n"
+        )
+    user_parts.append(
+        "Event: " + event_name + "\n"
+        "Occasion: " + str(occasion) + ", Season: " + str(season) + "\n"
+        "Event description: " + description + "\n\n"
+        "Clothes index schema:\n" + (clothes_schema or "No schema.")
+        + "\n\nGenerate exactly 3 new unique clothing items (one top, one bottom, one shoes) as a single JSON object: {\"items\": [ {...}, {...}, {...} ]}."
+    )
+    user = "".join(user_parts)
+
+    resp = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.8,
+    )
+    text = (resp.choices[0].message.content or "").strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        logger.error("OpenAI returned invalid JSON: %s", e, extra={"raw_preview": text[:300]})
+        raise ValueError("OpenAI response was not valid JSON") from e
+
+    items = data.get("items")
+    if not isinstance(items, list) or len(items) != 3:
+        raise ValueError("OpenAI must return {\"items\": [top, bottom, shoes]} with exactly 3 objects")
+
+    for i, obj in enumerate(items):
+        if not isinstance(obj, dict):
+            raise ValueError("Each item must be a JSON object")
+        obj.setdefault("body", ["top", "bottom", "shoes"][i])
+        obj["occation"] = occasion
+        obj["season"] = season
+    return items
+
+
+def index_clothes_doc(es, doc):
+    """Index one clothing document into the clothes index. Returns index result."""
+    doc_id = "cloth_" + uuid.uuid4().hex[:12]
+    return es.index(index=INDEX_CLOTHES, id=doc_id, body=doc, request_timeout=30)
+
+
 # --- API routes ---
 @app.route("/", methods=["GET"])
 def index():
     """Service info and usage."""
     return jsonify({
         "service": "event-generator",
-        "description": "Generate events for the chatbot app; stores in Elasticsearch.",
+        "description": "Generate events and 3 clothes per event; stores in Elasticsearch (events + clothes indices).",
         "endpoints": [
             "GET  /         - this info",
             "GET  /health   - health check",
-            "POST /generate - generate N events (default 10), optional body: {\"count\": N}",
+            "POST /generate - generate N events (default 10), each with 3 clothing items; optional body: {\"count\": N}",
         ],
         "events_per_run_default": EVENTS_PER_RUN,
     }), 200
@@ -340,8 +456,8 @@ def health_check():
 @app.route("/generate", methods=["POST"])
 def generate_events():
     """
-    Generate N new events (default 10), store in Elasticsearch events index.
-    Optional JSON body: { "count": 10 } to override number of events.
+    Generate N new events (default 10), each with 3 clothing items (top, bottom, shoes).
+    Events stored in Elasticsearch events index; clothes in clothes index. Optional body: { "count": N }.
     """
     try:
         count = EVENTS_PER_RUN
@@ -352,13 +468,17 @@ def generate_events():
 
         index_docs = load_elastic_index_docs()
         events_schema = index_docs.get("events_schema")
+        clothes_schema = index_docs.get("clothes_schema")
         if not events_schema:
             return jsonify({"error": "Elastic_indexes/put-events+embeddings.md not found", "status": "error"}), 500
+        if not clothes_schema:
+            return jsonify({"error": "Elastic_indexes/put-clothese.md not found", "status": "error"}), 500
 
         openai_client = get_openai_client()
         es = get_elasticsearch_client()
 
-        created = []
+        created_events = []
+        created_clothes = []
         for i in range(count):
             # Fetch existing events on each loop so the list is up to date (includes just-indexed events)
             existing_events = fetch_existing_events_names_descriptions(es)
@@ -374,13 +494,39 @@ def generate_events():
             # Ensure unique event_id so we create N distinct documents (OpenAI often repeats evt_002)
             event_doc["event_id"] = f"evt_gen_{uuid.uuid4().hex[:8]}"
             result = index_event(es, event_doc)
-            created.append({"event_id": event_doc["event_id"], "_id": result.get("_id"), "result": result.get("result")})
+            created_events.append({"event_id": event_doc["event_id"], "_id": result.get("_id"), "result": result.get("result")})
             logger.info("Indexed event", extra={"event_id": event_doc["event_id"], "_id": result.get("_id")})
+
+            # Generate 3 clothes for this event: fetch existing clothes, call OpenAI, index to clothes
+            existing_clothes = fetch_existing_clothes_names_descriptions(es)
+            existing_clothes_text = "\n".join(
+                f"- Name: {c['name']}\n  Description: {c['description']}"
+                for c in existing_clothes
+            )
+            try:
+                items = generate_three_clothes_for_event(
+                    openai_client, clothes_schema, event_doc, existing_clothes_text
+                )
+                for item in items:
+                    clothes_result = index_clothes_doc(es, item)
+                    created_clothes.append({
+                        "event_id": event_doc["event_id"],
+                        "body": item.get("body"),
+                        "item_name": item.get("name"),
+                        "_id": clothes_result.get("_id"),
+                    })
+                    logger.info(
+                        "Indexed clothes",
+                        extra={"item_name": item.get("name"), "body": item.get("body"), "_id": clothes_result.get("_id")},
+                    )
+            except ValueError as e:
+                logger.warning("Skipping clothes for event %s: %s", event_doc.get("event_id"), e)
 
         return jsonify({
             "status": "success",
-            "message": f"Generated and indexed {len(created)} events",
-            "created": created,
+            "message": f"Generated and indexed {len(created_events)} events and {len(created_clothes)} clothing items",
+            "created_events": created_events,
+            "created_clothes": created_clothes,
         }), 200
     except ValueError as e:
         logger.warning("Generate validation error: %s", e)
