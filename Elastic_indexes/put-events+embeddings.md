@@ -229,10 +229,10 @@ PUT /events
 }
 ```
 
-# Step 4 - Test document
+# Step 4 - Test document (Example)
 ```
 PUT /events/_doc/1
-{
+{s
   "event_id": "evt_001",
   "name": "Summer Garden Wedding",
   "occasion": "wedding",

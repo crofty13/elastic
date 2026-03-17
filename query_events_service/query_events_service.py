@@ -254,85 +254,56 @@ def health_check():
 def query_events():
     """
     API endpoint to query events from Elasticsearch using kNN search.
-    
-    Expects JSON body with:
-    - query_vector: list[float] (required, embedding vector)
-    - index_name: str (optional, default: "events")
-    - k: int (optional, default: 3)
-    - num_candidates: int (optional, default: 10)
-    - source_fields: list[str] (optional)
-    
-    Returns JSON with 'results' field containing list of events.
+    Accepts either model_text (ES inference) or query_vector (pre-computed).
     """
     try:
         if not request.is_json:
-            return jsonify({
-                'error': 'Request must be JSON',
-                'status': 'error'
-            }), 400
+            return jsonify({'error': 'Request must be JSON', 'status': 'error'}), 400
         
         data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Missing request body', 'status': 'error'}), 400
         
-        if not data or 'query_vector' not in data:
+        model_text = data.get('model_text')
+        query_vector = data.get('query_vector')
+        if not model_text and query_vector is None:
             return jsonify({
-                'error': 'Missing required parameter: query_vector',
+                'error': 'Provide either model_text or query_vector',
                 'status': 'error'
             }), 400
         
-        query_vector = data['query_vector']
         index_name = data.get('index_name', 'events')
-        k = data.get('k', 3)
+        k = data.get('k', 1)
         num_candidates = data.get('num_candidates', 10)
+        model_id = data.get('model_id', 'my-openai-embeddings')
         source_fields = data.get('source_fields', None)
         
-        # Default source fields if not provided
         if source_fields is None:
             source_fields = [
-                "event_id",
-                "name",
-                "occasion",
-                "season",
-                "formality",
-                "description",
-                "dos",
-                "donts",
-                "fashion_trends_women",
-                "fashion_trends_men"
+                "event_id", "name", "occasion", "season", "formality",
+                "description", "dos", "donts", "fashion_trends_women", "fashion_trends_men"
             ]
         
-        # Initialize Elasticsearch client
         es = get_elasticsearch_client()
         
-        # Build the kNN query body
-        knn_body = {
-            "_source": source_fields,
-            "knn": {
-                "field": "embedding",
-                "query_vector": query_vector,
-                "k": k,
-                "num_candidates": num_candidates
+        knn_clause = {"field": "embedding", "k": k, "num_candidates": num_candidates}
+        if model_text:
+            knn_clause["query_vector_builder"] = {
+                "text_embedding": {
+                    "model_id": model_id,
+                    "model_text": model_text.strip()
+                }
             }
-        }
+        else:
+            knn_clause["query_vector"] = query_vector
         
-        # Log before Elasticsearch API call
-        logger.info("Calling Elasticsearch search API", extra={
-            "endpoint": ELASTIC_ENDPOINT,
-            "index": index_name,
-            "api_call": "search",
-            "query_type": "knn",
-            "k": k,
-            "num_candidates": num_candidates,
-            "query_vector_length": len(query_vector),
-            "source_fields": source_fields
-        })
+        knn_body = {"_source": source_fields, "knn": knn_clause}
         
-        # Execute the search
+        logger.info("Elasticsearch request", extra={"index": index_name, "elastic_request": knn_body})
         res = es.search(index=index_name, body=knn_body)
-        
-        logger.info("Elasticsearch search API call successful", extra={
+        logger.info("Elasticsearch response", extra={
             "index": index_name,
-            "hits_count": len(res.get("hits", {}).get("hits", [])),
-            "total_hits": res.get("hits", {}).get("total", {}).get("value", 0)
+            "elastic_response": res,
         })
         
         # Extract hits

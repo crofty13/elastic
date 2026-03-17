@@ -15,7 +15,7 @@ fi
 
 echo "Building for local architecture: $PLATFORM"
 # Build for local architecture only
-docker buildx build --platform $PLATFORM -f "$SCRIPT_DIR/Dockerfile" -t embed-user-query-service:v1 "$SCRIPT_DIR" --load
+docker buildx build --platform $PLATFORM -f "$SCRIPT_DIR/Dockerfile" -t embed-user-query-service:v2 "$SCRIPT_DIR" --load
 
 kubectl apply -f "$SCRIPT_DIR/deployment.yaml"
 kubectl rollout status deployment embed-user-query-service --timeout=120s

@@ -15,10 +15,11 @@ spec:
     metadata:
       labels:
         app: query-clothes-service
+        version: "4"  # Bump this to force rolling restart (e.g. "5" after code changes)
     spec:
       containers:
       - name: query-clothes-api
-        image: query-clothes-service:v2
+        image: query-clothes-service:v6
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5003

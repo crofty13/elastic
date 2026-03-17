@@ -12,6 +12,7 @@ import os
 import json
 import logging
 import logging.handlers
+import re
 from datetime import datetime
 import requests
 
@@ -253,31 +254,26 @@ def embed_query(user_query: str) -> list:
         raise ValueError(f"Failed to call embed service: {str(e)}")
 
 
-def query_events(query_vector: list, k: int = 3) -> dict:
+def query_events(model_text: str = None, query_vector: list = None, k: int = 1, model_id: str = "my-openai-embeddings") -> dict:
     """
-    Call the query_events microservice to search for events.
-    
-    Args:
-        query_vector: The embedding vector to search with
-        k: Number of results to return
-        
-    Returns:
-        Dict containing events results
+    Call the query_events microservice. Use model_text (ES inference) or query_vector (pre-computed).
+    For the fixed demo "I am going to Ascot", model_text ensures Royal Ascot (occasion: horse racing) is returned.
     """
-    logger.info("Calling query events service", extra={
-        "service_url": QUERY_EVENTS_SERVICE_URL,
-        "query_vector_length": len(query_vector),
-        "query_vector": query_vector[:10],
-        "k": k
-    })
+    if model_text is None and query_vector is None:
+        raise ValueError("Provide either model_text or query_vector")
+    payload = {"k": k}
+    if model_text is not None:
+        payload["model_text"] = model_text.strip()
+        payload["model_id"] = model_id
+        logger.info("Calling query events service (model_text)", extra={"service_url": QUERY_EVENTS_SERVICE_URL, "model_text": model_text[:80], "k": k})
+    else:
+        payload["query_vector"] = query_vector
+        logger.info("Calling query events service (query_vector)", extra={"service_url": QUERY_EVENTS_SERVICE_URL, "query_vector_length": len(query_vector), "k": k})
     
     try:
         response = requests.post(
             f"{QUERY_EVENTS_SERVICE_URL}/query",
-            json={
-                "query_vector": query_vector,
-                "k": k
-            },
+            json=payload,
             timeout=30
         )
         response.raise_for_status()
@@ -373,6 +369,79 @@ def get_clothes_list(gender: str, occation: str = None) -> list:
         raise ValueError(f"Failed to call query clothes service: {str(e)}")
 
 
+def _parse_price(price_str: str) -> int:
+    """Parse a price string (e.g. '£50', '£120') to pence. Returns 0 if unparseable."""
+    if not price_str:
+        return 0
+    s = str(price_str).strip().replace("£", "").replace(",", "").replace(" ", "")
+    digits = "".join(c for c in s if c.isdigit() or c == ".")
+    if not digits:
+        return 0
+    try:
+        return int(round(float(digits) * 100))
+    except ValueError:
+        return 0
+
+
+def _format_price_pounds(pence: int) -> str:
+    """Format pence as British pounds, e.g. 15000 -> '£150'."""
+    if pence <= 0:
+        return "£0"
+    return f"£{pence // 100}" + (f".{(pence % 100):02d}" if pence % 100 else "")
+
+
+def _find_clothes_item_by_name(clothes_list: list, name: str) -> dict:
+    """Find a clothing item by name (exact or case-insensitive). Returns first match or None."""
+    if not name or not clothes_list:
+        return None
+    name_clean = str(name).strip().lower()
+    # If AI returns "Item 1: Light Blue Shirt", strip the "Item N: " prefix
+    name_clean = re.sub(r"^item\s+\d+\s*:\s*", "", name_clean).strip()
+    for item in clothes_list:
+        item_name = (item.get("name") or "").strip().lower()
+        if item_name == name_clean or name_clean in item_name or item_name in name_clean:
+            return item
+    return None
+
+
+def _format_recommendation_html(
+    event_description: str,
+    top_item: dict,
+    bottom_item: dict,
+    shoes_item: dict,
+    styling_tips: str,
+) -> str:
+    """Build the recommendation as HTML with consistent layout. Total price is calculated from the three items."""
+    parts = []
+    parts.append("<p><strong>Event Description:</strong></p>")
+    parts.append(f"<p>{event_description or 'No description.'}</p>")
+
+    def row(label: str, item: dict) -> str:
+        if not item:
+            return f"<p><strong>{label}:</strong> —<br>Price: —</p>"
+        name = item.get("name") or "—"
+        desc = item.get("description") or ""
+        price = item.get("price") or "—"
+        return f"<p><strong>{label}:</strong><br>{name}<br>{desc}<br>Price: {price}</p>"
+
+    parts.append(row("Top", top_item))
+    parts.append(row("Bottom", bottom_item))
+    parts.append(row("Shoes", shoes_item))
+
+    total_pence = (
+        _parse_price((top_item or {}).get("price"))
+        + _parse_price((bottom_item or {}).get("price"))
+        + _parse_price((shoes_item or {}).get("price"))
+    )
+    parts.append(f"<p><strong>Total price:</strong> {_format_price_pounds(total_pence)}</p>")
+
+    if styling_tips and styling_tips.strip():
+        parts.append("<p><strong>Styling tips:</strong></p>")
+        parts.append(f"<p>{styling_tips.strip()}</p>")
+
+    return "\n".join(parts)
+
+
 def get_recommendation(user_query: str) -> str:
     """
     Main RAG workflow function that processes a user query and returns a recommendation.
@@ -395,13 +464,9 @@ def get_recommendation(user_query: str) -> str:
         logger.warning("Empty query received")
         raise ValueError("Please provide a valid query.")
     
-    # Step 1: Embed the user query (via microservice)
-    logger.info("Step 1: Embedding user query")
-    query_vector = embed_query(user_query)
-    
-    # Step 2: Query events using kNN search (via microservice)
-    logger.info("Step 2: Querying events")
-    events_result = query_events(query_vector, k=3)
+    # Step 1 & 2: Query events using model_text so Elasticsearch does the embedding (e.g. "I am going to Ascot" -> Royal Ascot, occasion: horse racing)
+    logger.info("Step 1-2: Querying events with model_text")
+    events_result = query_events(model_text=user_query.strip(), k=1)
     events_hits = events_result["hits"]["hits"]
     
     if not events_hits:
@@ -435,6 +500,12 @@ def get_recommendation(user_query: str) -> str:
         occation=occation
     )
     
+    if not clothes_results:
+        logger.warning("No clothes found for occasion", extra={"occation": occation})
+        raise ValueError(
+            "No clothing items found for this occasion. Try a different event or check that the clothes index is populated."
+        )
+    
     # Step 5: Prepare context for OpenAI
     logger.info("Step 5: Preparing context for OpenAI")
     # Format events for the prompt
@@ -446,12 +517,12 @@ def get_recommendation(user_query: str) -> str:
         for i, hit in enumerate(events_hits)
     ])
     
-    # Format clothes for the prompt
+    # Format clothes for the prompt (include body and price so AI can pick and we can format)
     clothes_context = "\n\n".join([
         f"Item {i+1}: {item.get('name', 'Unknown Item')}\n"
-        f"Category: {item.get('category', 'N/A')}\n"
+        f"Body (category): {item.get('body', item.get('category', 'N/A'))}\n"
         f"Description: {item.get('description', 'No description')}\n"
-        f"Color: {item.get('color', 'N/A')}"
+        f"Price: {item.get('price', 'N/A')}"
         for i, item in enumerate(clothes_results)
     ])
     
@@ -462,13 +533,16 @@ def get_recommendation(user_query: str) -> str:
         "clothes_context_length": len(clothes_context)
     })
     
-    # Create the OpenAI prompt
-    system_prompt = """You are a fashion advisor helping users dress appropriately for specific occasions. 
-Based on the event details and available clothing items provided, give personalized recommendations."""
-    
-    user_prompt = f"""Please output the answer to the following question is html format.
-    Based on the following event information and available clothing items, provide a detailed write-up 
-for what to wear. Only recommend clothes from the items listed below.
+    # Create the OpenAI prompt: ask for JSON with 1-based indices (not names) so we look up by position reliably.
+    system_prompt = """You are a fashion advisor. You must respond with valid JSON only, no other text or markdown.
+Your response must be a single JSON object with exactly these keys:
+- "top_item_index": integer (the Item number, 1-based, of the TOP you choose from the list - e.g. if you pick "Item 3: ..." then use 3)
+- "bottom_item_index": integer (the Item number of the BOTTOM you choose)
+- "shoes_item_index": integer (the Item number of the SHOES you choose)
+- "styling_tips": string (brief styling tips and why these choices work for this occasion, no more than 100 words)
+You MUST use the exact Item numbers from the list (1, 2, 3, ...). Pick one item with body "top", one with "bottom", one with "shoes"."""
+
+    user_prompt = f"""Pick exactly one top, one bottom, and one shoes from the AVAILABLE CLOTHING ITEMS below. Reply with the ITEM NUMBER (1, 2, 3, ...) for each choice.
 
 USER REQUEST:
 {user_query}
@@ -476,39 +550,93 @@ USER REQUEST:
 MATCHING EVENTS:
 {events_context}
 
-AVAILABLE CLOTHING ITEMS:
+AVAILABLE CLOTHING ITEMS (use the number after "Item N:"):
 {clothes_context}
 
-Please provide:
-1. A summary of the event.
-2. Pick clothese items ONLY from the ones above. pick one labelled top, one labelled bottom, one labelled shoes. Wrtie a brief summary of the outfit and then list the items, there decription and price (which should be formatted in britigh pounds
-3. Based on the clothing items you picked add the prices together to show the total.
-3. Styling tips and why these choices work for this occasion. This should be no more then 100 words.
-
+Respond with only this JSON object (no markdown, no code block). Use integers for the indices:
+{{"top_item_index": <number>, "bottom_item_index": <number>, "shoes_item_index": <number>, "styling_tips": "<your tips>"}}
 """
-    
+
     # Step 6: Send to OpenAI
     logger.info("Step 6: Calling OpenAI API")
     openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-    
+
+    openai_request = {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.7,
+    }
+    logger.info("OpenAI request", extra={"openai_request": openai_request})
+
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.7
+        response = openai_client.chat.completions.create(**openai_request)
+
+        openai_response = {
+            "content": response.choices[0].message.content if response.choices else None,
+            "usage": (
+                {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                }
+                if getattr(response, "usage", None) else None
+            ),
+        }
+        logger.info("OpenAI response", extra={"openai_response": openai_response})
+
+        raw = (response.choices[0].message.content or "").strip()
+        if not raw:
+            logger.warning("OpenAI returned empty content")
+            raise ValueError("The recommendation service returned an empty response. Please try again.")
+        # Strip markdown code block if present
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            raw = "\n".join(lines)
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.warning("OpenAI response was not valid JSON, falling back to raw text", extra={"error": str(e), "raw_preview": raw[:200]})
+            return raw if raw else "<p>Unable to format the recommendation. Please try again.</p>"
+
+        def item_by_index(idx):  # 1-based index into clothes_results
+            if idx is None:
+                return None
+            try:
+                i = int(idx)
+            except (TypeError, ValueError):
+                return None
+            if 1 <= i <= len(clothes_results):
+                return clothes_results[i - 1]
+            return None
+
+        top_item = item_by_index(data.get("top_item_index"))
+        bottom_item = item_by_index(data.get("bottom_item_index"))
+        shoes_item = item_by_index(data.get("shoes_item_index"))
+        styling_tips = (data.get("styling_tips") or "").strip()
+
+        event_description = top_event.get("description") or "No description available."
+        recommendation = _format_recommendation_html(
+            event_description=event_description,
+            top_item=top_item,
+            bottom_item=bottom_item,
+            shoes_item=shoes_item,
+            styling_tips=styling_tips,
         )
-        
-        recommendation = response.choices[0].message.content
-        
+
         logger.info("OpenAI API call successful", extra={
-            "model": "gpt-4o-mini",
+            "model": "gpt-3.5-turbo",
             "recommendation_length": len(recommendation),
-            "tokens_used": response.usage.total_tokens if hasattr(response, 'usage') else None
+            "tokens_used": response.usage.total_tokens if hasattr(response, "usage") else None
         })
-        
+
         logger.info("Recommendation workflow completed successfully")
         return recommendation
     except Exception as e:

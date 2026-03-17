@@ -15,7 +15,7 @@ fi
 
 echo "Building for local architecture: $PLATFORM"
 # Build for local architecture only
-docker buildx build --platform $PLATFORM -f "$SCRIPT_DIR/Dockerfile" -t query-events-service:v4 "$SCRIPT_DIR" --load
+docker buildx build --platform $PLATFORM -f "$SCRIPT_DIR/Dockerfile" -t query-events-service:v6 "$SCRIPT_DIR" --load
 
 kubectl apply -f "$SCRIPT_DIR/deployment.yaml"
 kubectl rollout status deployment query-events-service --timeout=120s

@@ -15,7 +15,9 @@ fi
 
 echo "Building for local architecture: $PLATFORM"
 # Build for local architecture only
-docker buildx build --platform $PLATFORM -f "$SCRIPT_DIR/Dockerfile" -t query-clothes-service:v2 "$SCRIPT_DIR" --load
+docker buildx build --platform $PLATFORM -f "$SCRIPT_DIR/Dockerfile" -t query-clothes-service:v6 "$SCRIPT_DIR" --load
 
 kubectl apply -f "$SCRIPT_DIR/deployment.yaml"
-kubectl rollout status deployment query-clothes-service --timeout=120s
+# Force rolling restart so new pods use the image we just built (same tag = no spec change otherwise)
+kubectl rollout restart deployment/query-clothes-service -n default
+kubectl rollout status deployment/query-clothes-service -n default --timeout=120s

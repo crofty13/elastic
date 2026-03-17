@@ -274,7 +274,7 @@ def query_clothes():
         occation = data.get('occation', None)  # Note: checking for 'occation' as that's what main_service sends
         occasion_tags = data.get('occasion_tags', None)
         index_name = data.get('index_name', 'clothes')
-        size = data.get('size', 10)
+        size = data.get('size', 3)
         
         # Handle both 'occation' (from main_service) and 'occasion_tags' for compatibility
         if occation and not occasion_tags:
@@ -283,49 +283,34 @@ def query_clothes():
         # Initialize Elasticsearch client
         es = get_elasticsearch_client()
         
-        # Build the query
-        bool_query = {
-            "must": [
-                { "term": { "gender": gender } }
-            ]
-        }
-        
-        # Add occasion filter if provided
+        # Build query: exact match on sex and occation (index uses "sex" and "occation" per put-clothese.md).
+        bool_query = {"must": [{ "term": { "sex": gender } }]}
         if occasion_tags:
-            bool_query["filter"] = [
-                { "terms": { "occasion": occasion_tags } }
-            ]
+            tags_list = occasion_tags if isinstance(occasion_tags, list) else [occasion_tags]
+            bool_query["must"].append({ "terms": { "occation.keyword": tags_list } })
         
-        clothes_query = {
-            "query": {
-                "bool": bool_query
-            },
-            "size": size
-        }
+        body = {"query": {"bool": bool_query}, "size": size}
+        logger.info("Elasticsearch request", extra={"index": index_name, "elastic_request": body})
+        clothes_res = es.search(index=index_name, body=body)
+        logger.info("Elasticsearch response", extra={"index": index_name, "elastic_response": clothes_res})
         
-        # Log before Elasticsearch API call
-        logger.info("Calling Elasticsearch search API", extra={
-            "endpoint": ELASTIC_ENDPOINT,
+        hits = clothes_res.get("hits", {}).get("hits", [])
+        
+        # If 0 results with sex+occation, retry with occation only (demo clothes may lack "sex" or use "unisex")
+        if not hits and occasion_tags:
+            tags_list = occasion_tags if isinstance(occasion_tags, list) else [occasion_tags]
+            logger.info("Clothes query returned 0 with sex+occation; retrying with occation only", extra={"gender": gender, "occasion_tags": occasion_tags})
+            body_occation_only = {"query": {"bool": {"must": [{ "terms": { "occation.keyword": tags_list } }]}}, "size": size}
+            clothes_res = es.search(index=index_name, body=body_occation_only)
+            hits = clothes_res.get("hits", {}).get("hits", [])
+        
+        logger.info("Query clothes Elasticsearch call completed", extra={
             "index": index_name,
-            "api_call": "search",
-            "query_type": "bool",
-            "gender": gender,
-            "occasion_tags": occasion_tags,
-            "size": size,
-            "query_body": clothes_query
-        })
-        
-        # Execute the search
-        clothes_res = es.search(index=index_name, body=clothes_query)
-        
-        logger.info("Elasticsearch search API call successful", extra={
-            "index": index_name,
-            "hits_count": len(clothes_res.get("hits", {}).get("hits", [])),
+            "hits_count": len(hits),
             "total_hits": clothes_res.get("hits", {}).get("total", {}).get("value", 0)
         })
         
-        # Extract just the _source from hits
-        clothes_list = [hit["_source"] for hit in clothes_res["hits"]["hits"]]
+        clothes_list = [hit["_source"] for hit in hits]
         
         logger.info("Query clothes endpoint completed successfully", extra={
             "clothes_returned": len(clothes_list)
