@@ -105,12 +105,67 @@
       background: linear-gradient(135deg, #ff4f8b, #ff7c5c);
       color: #fff; display: flex; align-items: center; gap: 0.4rem;
       box-shadow: 0 14px 30px rgba(255,79,139,0.55); white-space: nowrap;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .chat-btn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 16px 35px rgba(255,79,139,0.65);
+    }
+    .chat-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
     .chat-btn span.icon { font-size: 1.1rem; transform: translateY(1px); }
+    .chat-btn.loading span.icon::after {
+      content: "⏳";
+      animation: spin 1s linear infinite;
+    }
 
     .chat-suggestions { display: flex; flex-wrap: wrap; gap: 0.4rem; font-size: 0.75rem; }
-    .chip { padding: 0.2rem 0.7rem; border-radius: 999px; background: #f3f4ff; color: #4b4f7d; cursor: pointer; }
+    .chip { padding: 0.2rem 0.7rem; border-radius: 999px; background: #f3f4ff; color: #4b4f7d; cursor: pointer; transition: background 0.2s; }
+    .chip:hover { background: #e8e9ff; }
     .chip span { opacity: 0.55; }
+
+    .result-section {
+      margin-top: 2.6rem;
+      display: none;
+    }
+    .result-section.show {
+      display: block;
+      animation: fadeIn 0.5s ease-in;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .result-card {
+      background: rgba(255,255,255,0.96);
+      border-radius: var(--card-radius);
+      padding: 2rem;
+      box-shadow: var(--shadow-soft);
+      border: 1px solid rgba(148,163,184,0.18);
+      margin-bottom: 1.5rem;
+    }
+    .result-header {
+      display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.5rem;
+    }
+    .result-header h2 {
+      font-size: 1.3rem; margin: 0;
+      background: linear-gradient(135deg, #ff4f8b, #ffc857);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    .result-content {
+      font-size: 0.98rem; line-height: 1.7; color: var(--text-main);
+      white-space: pre-wrap;
+    }
+    .error-message {
+      background: rgba(255, 79, 139, 0.1);
+      border-left: 4px solid var(--accent-pink);
+      padding: 1rem;
+      border-radius: 8px;
+      color: var(--accent-pink);
+      margin-top: 1rem;
+    }
 
     .outfits-section { margin-top: 2.6rem; }
     .outfits-header {
@@ -220,7 +275,7 @@
         </h1>
 
         <p class="hero-subtitle">
-          Describe the wedding, party or trip you’re dressing for and get
+          Describe the wedding, party or trip you're dressing for and get
           three complete, ready-to-buy looks. No mixing individual items —
           every suggestion is a full head-to-toe outfit.
         </p>
@@ -233,23 +288,33 @@
 
           <div class="chat-row">
             <div class="chat-input-wrap">
-              <input type="text"
-                     placeholder="E.g. Summer wedding in Italy, I’m a guest and prefer bright colours…" />
+              <input type="text" id="chatInput"
+                     placeholder="E.g. Summer wedding in Italy, I'm a guest and prefer bright colours…" />
               <div class="chat-pill">3 looks · under 10 seconds</div>
             </div>
-            <button class="chat-btn">
+            <button class="chat-btn" id="chatBtn">
               <span>Find outfits</span>
               <span class="icon">⚡</span>
             </button>
           </div>
 
           <div class="chat-suggestions">
-            <div class="chip">“Black tie winter wedding”</div>
-            <div class="chip">“Office party after work”</div>
-            <div class="chip">“Beach holiday day-to-night”</div>
+            <div class="chip" data-query="Black tie winter wedding">"Black tie winter wedding"</div>
+            <div class="chip" data-query="Office party after work">"Office party after work"</div>
+            <div class="chip" data-query="Beach holiday day-to-night">"Beach holiday day-to-night"</div>
             <div class="chip"><span>+ Casual brunch, city break…</span></div>
           </div>
         </div>
+
+        <section class="result-section" id="resultSection">
+          <div class="result-card">
+            <div class="result-header">
+              <span>✨</span>
+              <h2>Your Personalized Recommendation</h2>
+            </div>
+            <div class="result-content" id="resultContent"></div>
+          </div>
+        </section>
 
         <section class="outfits-section">
           <div class="outfits-header">
@@ -257,16 +322,7 @@
             <p>Each card is one complete outfit · buy everything in one go.</p>
           </div>
 
-          <!-- ONE model image used for all three cards -->
           <div class="outfit-grid">
-            <!-- Replace once and all cards update -->
-            <!-- Pick a neutral “same woman” photo for mockup -->
-            <script>
-              const MODEL_IMAGE_URL =
-                "https://images.pexels.com/photos/1589216/pexels-photo-1589216.jpeg";
-            </script>
-
-            <!-- CARD 1 -->
             <article class="outfit-card accent-wedding">
               <div class="outfit-img-wrap">
                 <img src="https://images.pexels.com/photos/1589216/pexels-photo-1589216.jpeg"
@@ -290,7 +346,6 @@
               </div>
             </article>
 
-            <!-- CARD 2 -->
             <article class="outfit-card accent-party">
               <div class="outfit-img-wrap">
                 <img src="https://images.pexels.com/photos/1589216/pexels-photo-1589216.jpeg"
@@ -312,7 +367,6 @@
               </div>
             </article>
 
-            <!-- CARD 3 -->
             <article class="outfit-card accent-holiday">
               <div class="outfit-img-wrap">
                 <img src="https://images.pexels.com/photos/1589216/pexels-photo-1589216.jpeg"
@@ -339,8 +393,90 @@
     </main>
 
     <footer>
-      Outfit Finder · Mockup UI — replace images, copy and URLs with your own brand content.
+      Outfit Finder · Powered by Elasticsearch & OpenAI
     </footer>
   </div>
+
+  <script>
+    const chatInput = document.getElementById('chatInput');
+    const chatBtn = document.getElementById('chatBtn');
+    const resultSection = document.getElementById('resultSection');
+    const resultContent = document.getElementById('resultContent');
+    const chips = document.querySelectorAll('.chip[data-query]');
+
+    // Handle chip clicks
+    chips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        const query = chip.getAttribute('data-query');
+        chatInput.value = query;
+        handleQuery(query);
+      });
+    });
+
+    // Handle button click
+    chatBtn.addEventListener('click', () => {
+      const query = chatInput.value.trim();
+      if (query) {
+        handleQuery(query);
+      }
+    });
+
+    // Handle Enter key
+    chatInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        const query = chatInput.value.trim();
+        if (query) {
+          handleQuery(query);
+        }
+      }
+    });
+
+    async function handleQuery(query) {
+      // Disable input and button
+      chatInput.disabled = true;
+      chatBtn.disabled = true;
+      chatBtn.classList.add('loading');
+      chatBtn.querySelector('span').textContent = 'Finding outfits...';
+      
+      // Hide previous results
+      resultSection.classList.remove('show');
+      resultContent.textContent = '';
+
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ query: query })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'An error occurred');
+        }
+
+        // Show results
+        resultContent.textContent = data.recommendation;
+        resultSection.classList.add('show');
+        
+        // Scroll to results
+        resultSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+      } catch (error) {
+        resultContent.innerHTML = `<div class="error-message">❌ Error: ${error.message}</div>`;
+        resultSection.classList.add('show');
+      } finally {
+        // Re-enable input and button
+        chatInput.disabled = false;
+        chatBtn.disabled = false;
+        chatBtn.classList.remove('loading');
+        chatBtn.querySelector('span').textContent = 'Find outfits';
+      }
+    }
+  </script>
 </body>
 </html>
+
+
